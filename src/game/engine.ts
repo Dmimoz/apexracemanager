@@ -1440,7 +1440,9 @@ export class RaceSim {
       const perf = carPerf(gs, t, circuit);
       const skill = driverSkill(d, 'race', wetSession);
       const style = clamp((100 - d.consistency) / 100 * 0.6 + (d.racecraft / 100) * 0.4 + rnd() * 0.25, 0, 1);
-      const wearBias = 0.88 + rnd() * 0.24; // у каждого пилота резина «идёт» по-своему (±12%)
+      // детерминированно: стабильные пилоты бережнее расходуют резину, агрессивные — быстрее изнашивают.
+      // consistency 40 → 1.13, 70 → 1.0, 90 → 0.92
+      const wearBias = 1.3 - (d.consistency / 100) * 0.42;
       const strat = this.buildStrategy(d, t, style, i, wearBias, startOverrides?.[did]);
       const car: SimCar = {
         did, tid: t.id, code: d.code, name: d.name, color: t.color, color2: t.color2,
