@@ -1370,6 +1370,7 @@ export interface SimCar {
   style: number;                        // индивидуальная агрессивность ИИ 0..1
   usedTires: string[];                  // составы, на которых машина ехала (для правила двух составов)
   dsq: boolean;                         // дисквалифицирован (нарушение правила двух составов)
+  redParked: boolean;                   // стоит в боксах под красным флагом
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1390,7 +1391,7 @@ export class RaceSim {
   t = 0;
   phase: 'green' | 'sc' | 'vsc' | 'red' | 'cheq' = 'green';
   phaseEndLap = 0;
-  redT = 0;
+  redRemaining = 0;   // секунды реального времени до рестарта под красным флагом
   raining: boolean;
   rainAt: number;
   events: SimEvent[] = [];
@@ -1452,6 +1453,7 @@ export class RaceSim {
         style,
         usedTires: [plan.startTire],
         dsq: false,
+        redParked: false,
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1750,7 +1752,7 @@ export class RaceSim {
   }
 
   runningSorted(): SimCar[] {
-    return this.cars.filter((c) => c.status === 'run').sort((a, b) => b.dist - a.dist);
+    return this.cars.filter((c) => c.status === 'run' && !c.redParked).sort((a, b) => b.dist - a.dist);
   }
 
   computeStandings() {
@@ -2060,9 +2062,7 @@ export class RaceSim {
     if (this.phase === 'green' && !this.leaderDone && lapsLeft > 3) {
       const roll = rnd();
       if (reason.includes('Авария') && roll < 0.12 && this.leader().lap < this.totalLaps * 0.6) {
-        this.phase = 'red';
-        this.redT = 120;
-        this.event(car.lap, '🔴 КРАСНЫЙ ФЛАГ — гонка остановлена', 'red');
+        this.raiseRedFlag(car.lap);
       } else if (roll < 0.48) {
         this.phase = 'sc';
         this.phaseEndLap = this.leader().lap + 3 + Math.floor(rnd() * 2); // SC — минимум 3 круга
@@ -2072,6 +2072,91 @@ export class RaceSim {
         this.phaseEndLap = this.leader().lap + 2;
         this.event(car.lap, '⚠ ВИРТУАЛЬНАЯ МАШИНА БЕЗОПАСНОСТИ', 'sc');
       }
+    }
+  }
+
+  /**
+   * КРАСНЫЙ ФЛАГ: гонка останавливается, все машины съезжают в боксы.
+   * Отсчёт до рестарта идёт в реальном времени (tickRedFlag) и НЕ блокируется паузой.
+   * Под красным флагом замена шин бесплатна (это не пит-стоп — машины уже в боксах).
+   */
+  raiseRedFlag(lap: number) {
+    this.phase = 'red';
+    this.redRemaining = 40; // секунд реального времени
+    for (const car of this.cars) {
+      if (car.status === 'run') {
+        car.redParked = true;
+        car.pitting = false;
+        car.pitCrawl = 0;
+      }
+    }
+    this.event(lap, '🔴 КРАСНЫЙ ФЛАГ — гонка остановлена, все машины в боксах', 'red');
+    // ИИ пользуются моментом: бесплатно ставят свежие шины
+    for (const car of this.cars) {
+      if (car.status !== 'run' || car.isPlayer) continue;
+      this.aiRedFlagTire(car);
+    }
+  }
+
+  /** Отсчёт реального времени под красным флагом. Возвращает true, когда рестарт готов. */
+  tickRedFlag(dtReal: number): boolean {
+    if (this.phase !== 'red') return false;
+    this.redRemaining -= dtReal;
+    if (this.redRemaining <= 0) {
+      this.restartFromRed();
+      return true;
+    }
+    return false;
+  }
+
+  /** Рестарт после красного флага: машины выстраиваются в боксах по текущим позициям и стартуют с пит-лейна */
+  restartFromRed() {
+    this.phase = 'green';
+    const ranked = [...this.cars].filter((c) => c.status === 'run').sort((a, b) => a.pos - b.pos);
+    const lead = this.leader();
+    // все машины выстраиваются плотной колонной за лидером и стартуют с пит-лейна
+    ranked.forEach((car, i) => {
+      car.redParked = false;
+      car.dist = lead.dist - i * 10;
+      car.lapStartDist = car.dist;
+      car.lapStartT = this.t;
+      car.targetLap = this.lapEstimate(car);
+    });
+    this.event(lead.lap, '🟢 ЗЕЛЁНЫЙ ФЛАГ — рестарт с пит-лейна!', 'flag');
+  }
+
+  /** Бесплатная замена шин под красным флагом (доступна игроку и ИИ). Это НЕ пит-стоп. */
+  redFlagTire(did: string, tireId: string): boolean {
+    if (this.phase !== 'red') return false;
+    const car = this.cars.find((c) => c.did === did);
+    if (!car || car.status !== 'run' || !car.redParked) return false;
+    if (car.tire === tireId) return false;
+    car.tire = tireId;
+    car.tireAge = 0;
+    car.wear = 0;
+    car.usedTires.push(tireId);
+    this.event(car.lap, `🔧 ${car.code}: бесплатная замена шин под красным флагом → ${tireName(this.gs.playerSeries, tireId)}`, 'pit');
+    return true;
+  }
+
+  /** ИИ выбирает шины под красным флагом: если правило двух составов не выполнено — берёт недостающий, иначе свежий мягкий */
+  aiRedFlagTire(car: SimCar) {
+    const sid = this.gs.playerSeries;
+    const dry = dryCompounds(sid);
+    const ruleActive = (sid === 'f1' || sid === 'f2') && this.kind === 'race' && !this.raining && !this.wetSession;
+    const dryUsed = car.usedTires.filter((x) => !['I', 'W', 'AW'].includes(x));
+    let want: string | null = null;
+    if (ruleActive && new Set(dryUsed).size < 2) {
+      want = dry.find((cc) => !dryUsed.includes(cc.id))?.id ?? null; // добираем недостающий состав
+    } else if (car.wear / Math.max(1, compoundDef(sid, car.tire).life) > 0.2) {
+      want = car.tire; // свежий комплект того же состава
+    }
+    if (this.raining) want = sid === 'fe' ? 'AW' : 'I';
+    if (want && want !== car.tire) {
+      car.tire = want;
+      car.tireAge = 0;
+      car.wear = 0;
+      car.usedTires.push(want);
     }
   }
 
@@ -2105,7 +2190,8 @@ export class RaceSim {
   boxCar(did: string, tireId: string): boolean {
     const car = this.cars.find((c) => c.did === did);
     if (!car || car.status !== 'run') return false;
-    if (car.pitLaps.includes(car.lap + 1) || car.pitting) return false;
+    if (this.phase === 'red') return false; // под красным флагом машины уже в боксах — используйте бесплатную замену
+    if (car.redParked || car.pitLaps.includes(car.lap + 1) || car.pitting) return false;
     car.pitLaps.push(car.lap + 1);
     car.pendingTire = tireId;
     this.event(car.lap, `BOX BOX BOX! ${car.code} → ${tireName(this.gs.playerSeries, tireId)}`, 'pit');

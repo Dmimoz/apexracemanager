@@ -63,12 +63,17 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
       const s = simRef.current;
-      // авто-пауза при появлении машины безопасности / красных флагов
+      // авто-пауза при появлении машины безопасности / красных флагов;
+      // при рестарте после красного флага пауза снимается автоматически
       if (s.phase !== prevPhaseRef.current) {
         if (s.phase === 'sc' || s.phase === 'vsc' || s.phase === 'red') setPaused(true);
+        if (prevPhaseRef.current === 'red' && s.phase === 'green') setPaused(false);
         prevPhaseRef.current = s.phase;
       }
-      if (!s.done && !pausedRef.current) {
+      // красный флаг: отсчёт до рестарта идёт в РЕАЛЬНОМ времени и не блокируется паузой
+      if (s.phase === 'red') {
+        s.tickRedFlag(dtReal);
+      } else if (!s.done && !pausedRef.current) {
         acc += dtReal * BASE * speedRef.current;
         while (acc > STEP) { s.tick(STEP); acc -= STEP; }
       }
@@ -126,8 +131,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
         </div>
         <div className="flex items-center gap-2">
           {(sim.phase === 'sc' || sim.phase === 'vsc' || sim.phase === 'red') && (
-            <span className={`font-disp text-[9px] font-bold px-2 py-0.5 blink ${sim.phase === 'red' ? 'bg-[#c8102e] text-white' : 'bg-[#ffc94d] text-[#1a1408]'}`}>
-              {sim.phase === 'red' ? 'КРАСНЫЙ ФЛАГ' : sim.phase === 'sc' ? 'МАШИНА БЕЗОПАСНОСТИ' : 'ВИРТУАЛЬНЫЙ SC'}
+            <span className={`font-disp text-[9px] font-bold px-2 py-0.5 ${sim.phase === 'red' ? 'bg-[#c8102e] text-white' : 'bg-[#ffc94d] text-[#1a1408] blink'}`}>
+              {sim.phase === 'red'
+                ? `КРАСНЫЙ ФЛАГ · ${Math.max(0, Math.ceil(sim.redRemaining))} с`
+                : sim.phase === 'sc' ? 'МАШИНА БЕЗОПАСНОСТИ' : 'ВИРТУАЛЬНЫЙ SC'}
             </span>
           )}
           <button onClick={() => setPaused((p) => !p)}
@@ -143,9 +150,16 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
           ))}
         </div>
       </header>
-      {paused && !raceDone && (
+      {sim.phase === 'red' && !raceDone && (
+        <div className="shrink-0 px-4 py-2 bg-[#3a0d12] border-b border-[#c8102e] flex items-center gap-3 flex-wrap">
+          <span className="font-disp text-[12px] font-bold tracking-[0.12em] text-white blink">🔴 КРАСНЫЙ ФЛАГ</span>
+          <span className="num font-disp text-[15px] font-bold text-white">{Math.max(0, Math.ceil(sim.redRemaining))} с до рестарта</span>
+          <span className="text-[11px] text-[#ffb3bc]">Машины в боксах · замена шин бесплатна (это не пит-стоп) · рестарт с пит-лейна</span>
+        </div>
+      )}
+      {paused && !raceDone && sim.phase !== 'red' && (
         <div className="shrink-0 px-4 py-1 bg-[#141a10] border-b border-[#2f8f4e55] text-[11px] text-[#4ade80] font-semibold">
-          ⏸ Симуляция на паузе{(sim.phase === 'sc' || sim.phase === 'vsc' || sim.phase === 'red') ? ' — нейтралитет: спланируйте стратегию (пит-стоп под SC теряет вдвое меньше)' : ''}
+          ⏸ Симуляция на паузе{(sim.phase === 'sc' || sim.phase === 'vsc') ? ' — нейтралитет: спланируйте стратегию (пит-стоп под SC теряет вдвое меньше)' : ''}
         </div>
       )}
       {raceDone && (
@@ -274,17 +288,21 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                       );
                     })()}
                     <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                      <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Пит:</span>
+                      <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">{sim.phase === 'red' ? 'Шины (бесплатно):' : 'Пит:'}</span>
                       {[...slicks, ...wetTires].map((c) => (
-                        <button key={c.id} disabled={scheduled || car.pitting || car.status !== 'run'}
-                          onClick={() => { sim.boxCar(car.did, c.id); force((x) => x + 1); }}
-                          className="inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] font-semibold transition-colors disabled:opacity-30 border-[#2a3442] hover:border-[#d8f224]"
-                          title={c.name}>
+                        <button key={c.id} disabled={car.status !== 'run' || (sim.phase === 'red' ? (car.tire === c.id) : (scheduled || car.pitting))}
+                          onClick={() => {
+                            if (sim.phase === 'red') sim.redFlagTire(car.did, c.id);
+                            else sim.boxCar(car.did, c.id);
+                            force((x) => x + 1);
+                          }}
+                          className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] font-semibold transition-colors disabled:opacity-30 ${sim.phase === 'red' && car.tire === c.id ? 'border-[#4ade80] text-[#4ade80]' : 'border-[#2a3442] hover:border-[#d8f224]'}`}
+                          title={sim.phase === 'red' ? `${c.name} — бесплатная замена под красным флагом` : c.name}>
                           <span className="w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: c.color, background: `${c.color}33` }} />
                           {c.short}
                         </button>
                       ))}
-                      {scheduled && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">ЗАЕЗЖАЕТ</span>}
+                      {scheduled && sim.phase !== 'red' && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">ЗАЕЗЖАЕТ</span>}
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Режим:</span>
