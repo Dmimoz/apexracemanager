@@ -1368,6 +1368,7 @@ export interface SimCar {
   fuelMode: 'eco' | 'normal' | 'push';
   letThrough: boolean; letThroughLaps: number;
   style: number;                        // индивидуальная агрессивность ИИ 0..1
+  usedTires: string[];                  // составы, на которых машина ехала (для правила двух составов)
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1441,6 +1442,7 @@ export class RaceSim {
         fuelMode: t.id === gs.playerTeamId ? 'normal' : aiFuelMode(plan.mode, i),
         letThrough: false, letThroughLaps: 0,
         style,
+        usedTires: [plan.startTire],
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1562,6 +1564,19 @@ export class RaceSim {
       }
     }
     if (!stints.length) stints.push(sid === 'f1' ? 'M' : sid === 'indy' ? 'ALT' : 'O');
+    // ПРАВИЛО ДВУХ СОСТАВОВ (только сухие гонки, не спринты): Ф1/Ф2 обязаны использовать >=2 разных состава.
+    // Если стратегия свелась к одному составу — принудительно разбавляем её вторым (мягким или жёстким).
+    if (!wet && (sid === 'f1' || sid === 'f2') && this.kind === 'race' && stints.length >= 2) {
+      const uniq = new Set(stints);
+      if (uniq.size === 1) {
+        const ladder2 = dryCompounds(sid);
+        const only = stints[0];
+        // берём самый мягкий состав, отличный от текущего (иначе самый жёсткий)
+        const other = ladder2.find((x) => x.id !== only)?.id ?? only;
+        // ставим его на последний отрезок
+        stints[stints.length - 1] = other;
+      }
+    }
     return { startTire: stints[0], stints, pitLaps, mode };
   }
 
@@ -1801,6 +1816,7 @@ export class RaceSim {
     car.tireAge = 0;
     car.wear = 0;
     car.pitCount++;
+    if (!car.usedTires.includes(nextTire)) car.usedTires.push(nextTire);
   }
 
   cross(car: SimCar) {
@@ -1893,21 +1909,23 @@ export class RaceSim {
       if (sid === 'f2') {
         // Ф2: единственный плановый стоп по возможности делаем бесплатным под SC — свежий мягкий комплект.
         const soft = dryCompounds(sid)[0].id;
+        // если мягкий уже использован — берём другой состав, чтобы не нарушать правило двух составов
+        const scTire = car.usedTires.includes(soft) ? (dryCompounds(sid).find((x) => x.id !== soft)?.id ?? soft) : soft;
         if (car.pitCount === 0) {
           // ещё не питались — это наш 1 стоп, но бесплатный
           if (wear > 0.2 && car.lap < this.totalLaps - 6 && rnd() < 0.8) {
             car.pitLaps = car.pitLaps.filter((l) => l <= car.lap);
             car.pitLaps.push(car.lap + 1);
-            car.pendingTire = soft;
-            this.event(car.lap, `${car.code}: бесплатный пит под SC — свежий мягкий комплект`, 'pit');
+            car.pendingTire = scTire;
+            this.event(car.lap, `${car.code}: бесплатный пит под SC — свежий ${scTire === soft ? 'мягкий' : 'жёсткий'} комплект`, 'pit');
             return;
           }
         } else if (car.pos > 10 && wear > 0.4 && lapsLeft > 10 && rnd() < 0.6) {
-          // вне топ-10: терять нечего — рискуем и берём ещё один свежий мягкий
+          // вне топ-10: терять нечего — рискуем и берём ещё один свежий комплект
           car.pitLaps = car.pitLaps.filter((l) => l <= car.lap);
           car.pitLaps.push(car.lap + 1);
-          car.pendingTire = soft;
-          this.event(car.lap, `${car.code} (P${car.pos}): идёт ва-банк — свежий мягкий под SC`, 'pit');
+          car.pendingTire = scTire;
+          this.event(car.lap, `${car.code} (P${car.pos}): идёт ва-банк — свежий ${scTire === soft ? 'мягкий' : 'жёсткий'} под SC`, 'pit');
           return;
         }
         // Ф2 в топ-10, уже питавшийся — остаётся на трассе, бережёт позицию
@@ -2125,6 +2143,22 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
   const sid = gs.playerSeries;
   const meta = SERIES_META[sid];
   const ss = gs.series[sid];
+
+  // ПРАВИЛО ДВУХ СОСТАВОВ (Ф1/Ф2, только сухие гонки, не спринты):
+  // каждый финишировавший обязан использовать >=2 разных состава. Иначе — штраф +30 с.
+  // Не действует, если по ходу гонки был дождь или машина использовала дождевые шины.
+  const twoCompoundViolators: string[] = [];
+  if (stage === 'race' && (sid === 'f1' || sid === 'f2') && !sim.wetSession && !sim.raining) {
+    for (const car of sim.cars) {
+      if (car.status !== 'fin') continue;
+      const dryUsed = car.usedTires.filter((x) => x !== 'I' && x !== 'W' && x !== 'AW');
+      if (new Set(dryUsed).size < 2) {
+        car.finishT += 30;
+        twoCompoundViolators.push(car.code);
+      }
+    }
+  }
+
   const results = sim.results();
   const winner = results[0];
   const winT = winner.finishT;
@@ -2155,6 +2189,9 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     notes.push(`Быстрейший круг: ${gs.drivers[fl.did].name} (+${meta.flPoints} очк.)`);
   }
   if (indy500 && stage === 'race') notes.push('Инди-500: двойные очки');
+  if (twoCompoundViolators.length) {
+    notes.push(`⚠ Правило двух составов нарушено — штраф +30 с: ${twoCompoundViolators.join(', ')}`);
+  }
   w.results[stage] = { stage, title: stageTitle(gs, stage), rows, notes };
   w.stageIdx++;
 

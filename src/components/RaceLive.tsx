@@ -250,6 +250,25 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                         {car.status === 'run' ? (fuelOk ? `+${fuelLeft.toFixed(0)} кг` : `−${Math.abs(fuelLeft).toFixed(0)} кг!`) : '—'}
                       </span>
                     </div>
+                    {/* Правило двух составов (Ф1/Ф2, сухая гонка) */}
+                    {stage === 'race' && (sid === 'f1' || sid === 'f2') && !sim.wetSession && !sim.raining && (() => {
+                      const dryUsed = car.usedTires.filter((x) => x !== 'I' && x !== 'W' && x !== 'AW');
+                      const ok = new Set(dryUsed).size >= 2;
+                      return (
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[9px] uppercase tracking-widest text-[#7f8da0] w-14 shrink-0">2 состава</span>
+                          <span className="flex items-center gap-1">
+                            {dryUsed.map((id) => {
+                              const c = compoundDef(sid, id);
+                              return <span key={id} className="w-3 h-3 rounded-full border-2" title={c.name} style={{ borderColor: c.color, background: `${c.color}33` }} />;
+                            })}
+                          </span>
+                          <span className={`text-[10px] font-bold ${ok ? 'text-[#4ade80]' : 'text-[#ffc94d]'}`}>
+                            {ok ? '✓ выполнено' : '⚠ нужен ещё 1 состав'}
+                          </span>
+                        </div>
+                      );
+                    })()}
                     <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                       <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Пит:</span>
                       {[...slicks, ...wetTires].map((c) => (
