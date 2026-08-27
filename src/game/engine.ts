@@ -1498,20 +1498,46 @@ export class RaceSim {
       const degF = 0.55 + c.deg * 0.65;
       const capAlt = Math.max(6, Math.floor(compoundDef(sid, 'ALT').life * 0.75 / (modeF * degF)));
       const stopEvery = Math.max(8, capAlt - Math.round(rnd() * 6));
-      for (let l = stopEvery; l < laps - 3; l += stopEvery) pitLaps.push(l);
-      stints.push(...pitLaps.map(() => rnd() < 0.7 ? 'ALT' : 'PRIM'));
+        for (let l = stopEvery; l < laps - 3; l += stopEvery) pitLaps.push(l);
+        stints.push(...pitLaps.map(() => rnd() < 0.7 ? 'ALT' : 'PRIM'));
+    } else if (sid === 'f2') {
+      // Ф2: по стратегии — ровно 1 плановый пит-стоп (два отрезка).
+      const ladder = dryCompounds(sid);                      // [O мягкий, P жёсткий]
+      const soft = ladder[0].id;
+      const hard = ladder[ladder.length - 1].id;
+      const degF = 0.55 + c.deg * 0.65;
+      const wearRate = modeF * degF * this.degMod * tireCareFactor(this.gs, t.id);
+      // длина отрезка, при которой состав изнашивается до ~78% (вплотную к зоне проколов 80%, но безопасно)
+      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.78 / wearRate));
+      // Подбираем единственный пит так, чтобы ОБА отрезка уложились в ресурс состава.
+      const findPit = (first: string, second: string): number | null => {
+        const lo = laps - capOf(second);   // минимум: второй отрезок <= cap
+        const hi = capOf(first);           // максимум: первый отрезок <= cap
+        if (lo > hi || lo < 1) return null;
+        return clamp(Math.round(laps * (mode === 'aggr' ? 0.42 : mode === 'cons' ? 0.6 : 0.5)), lo, hi);
+      };
+      // агрессивные стартуют на мягком, консерваторы — на жёстком
+      let order = mode === 'aggr' ? [soft, hard] : [hard, soft];
+      let L = findPit(order[0], order[1]);
+      if (L == null) { order = [order[1], order[0]]; L = findPit(order[0], order[1]); }
+      if (L != null) {
+        stints.push(order[0], order[1]);
+        pitLaps.push(L);
+      } else {
+        // дистанция не позволяет 1 стоп (очень длинная гонка / агрессивный режим) — 2 стопа
+        stints.push(soft, hard, hard);
+        pitLaps.push(capOf(soft), capOf(soft) + capOf(hard));
+      }
     } else {
-      // Ф1, Ф2, Индикар(роуд): надёжные stint'ы БЕЗ переката резины.
-      // Каждый отрезок не длиннее ресурса своего состава; число питов растёт само,
+      // Ф1, Индикар(роуд): надёжные stint'ы БЕЗ переката резины.      // Каждый отрезок не длиннее ресурса своего состава; число питов растёт само,
       // если дистанция длинная. Последний отрезок гарантированно доезжает до финиша.
       const ladder = dryCompounds(sid);                      // мягкий → жёсткий
       const hard = ladder[ladder.length - 1].id;
-      // ресурс состава в кругах: учитываем ВСЕ множители износа, которые действуют в гонке
-      // (режим, топливо, абразивность, уход команды за резиной, настройки), цель ~60% — большой запас до проколов
+      // ресурс состава в кругах: учитываем множители износа, действующие в гонке
+      // (режим, абразивность, уход команды за резиной); цель ~75% износа — реалистично и до зоны проколов
       const degF = 0.55 + c.deg * 0.65;
-      const fuelF = 1.1;                                    // запас на push-режимы по ходу stint'а
-      const wearAll = modeF * fuelF * degF * tireCareFactor(this.gs, t.id);
-      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.6 / wearAll));
+      const wearAll = modeF * degF * this.degMod * tireCareFactor(this.gs, t.id);
+      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.75 / wearAll));
       // желаемое число питов по режиму; увеличиваем, если даже жёсткий состав не покроет дистанцию
       let stops = mode === 'aggr' ? 2 : 1;
       while (Math.ceil(laps / (stops + 1)) > capOf(hard) && stops < 3) stops++;
@@ -1861,10 +1887,34 @@ export class RaceSim {
       }
       return;
     }
-    // под машиной безопасности пит «почти бесплатный» — ИИ переносит дальний стоп на этот круг
-    // (только если резина уже заметно поработала, иначе это был бы лишний пит)
-    if ((this.phase === 'sc' || this.phase === 'vsc') && wear > 0.55 && car.lap < this.totalLaps - 4) {
-      if (nextPlanned == null || nextPlanned - car.lap > 2) {
+    // под машиной безопасности пит «почти бесплатный»
+    if (this.phase === 'sc' || this.phase === 'vsc') {
+      const sid = this.gs.playerSeries;
+      if (sid === 'f2') {
+        // Ф2: единственный плановый стоп по возможности делаем бесплатным под SC — свежий мягкий комплект.
+        const soft = dryCompounds(sid)[0].id;
+        if (car.pitCount === 0) {
+          // ещё не питались — это наш 1 стоп, но бесплатный
+          if (wear > 0.2 && car.lap < this.totalLaps - 6 && rnd() < 0.8) {
+            car.pitLaps = car.pitLaps.filter((l) => l <= car.lap);
+            car.pitLaps.push(car.lap + 1);
+            car.pendingTire = soft;
+            this.event(car.lap, `${car.code}: бесплатный пит под SC — свежий мягкий комплект`, 'pit');
+            return;
+          }
+        } else if (car.pos > 10 && wear > 0.4 && lapsLeft > 10 && rnd() < 0.6) {
+          // вне топ-10: терять нечего — рискуем и берём ещё один свежий мягкий
+          car.pitLaps = car.pitLaps.filter((l) => l <= car.lap);
+          car.pitLaps.push(car.lap + 1);
+          car.pendingTire = soft;
+          this.event(car.lap, `${car.code} (P${car.pos}): идёт ва-банк — свежий мягкий под SC`, 'pit');
+          return;
+        }
+        // Ф2 в топ-10, уже питавшийся — остаётся на трассе, бережёт позицию
+        return;
+      }
+      // другие серии: переносим дальний плановый стоп на бесплатный под SC
+      if (wear > 0.55 && car.lap < this.totalLaps - 4 && (nextPlanned == null || nextPlanned - car.lap > 2)) {
         car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
         car.pitLaps.push(car.lap + 1);
         this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
@@ -1872,8 +1922,11 @@ export class RaceSim {
       }
     }
     // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финища
-    const projectedEnd = wear + lapsLeft * wpl;
-    // дотягивает до финиша с износом <=80% — пит не нужен
+    // оцениваем износ ДО СЛЕДУЮЩЕГО ПЛАНОВОГО ПИТА (а если его нет — до финиша),
+    // иначе корректный план (1 стоп в Ф2) «перепланировался» бы в лишние заезды
+    const horizon = nextPlanned != null ? nextPlanned - car.lap : lapsLeft;
+    const projectedEnd = wear + horizon * wpl;
+    // резина доживёт до планового пита (или финиша) с износом <=80% — ничего не меняем
     if (projectedEnd <= 0.8) return;
     // финиш близко — пит-стоп чистый проигрыш, дотягиваем в щадящем режиме
     if (lapsLeft <= 6) {
