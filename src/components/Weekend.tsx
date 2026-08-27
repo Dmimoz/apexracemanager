@@ -116,7 +116,7 @@ export default function WeekendScreen({ onStartSession }: { onStartSession: (sta
                   <div key={st}>
                     <div className="font-disp text-[11px] font-bold tracking-[0.18em] text-[#9fb0c4] mb-2 uppercase">{r.title}</div>
                     {r.notes.map((n, i) => <div key={i} className="text-[12px] text-[#7f8da0] mb-1">· {n}</div>)}
-                    <ResultTable rows={r.rows.slice(0, 10)} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} />
+                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} />
                   </div>
                 );
               })}

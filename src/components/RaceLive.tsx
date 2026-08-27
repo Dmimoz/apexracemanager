@@ -9,7 +9,7 @@ import type { RaceSim } from '../game/engine';
 import TrackCanvas from './TrackCanvas';
 import { Btn, FlagTag, Icon } from './ui';
 
-const SPEEDS = [1, 2, 4, 8, 16];
+const SPEEDS = [1, 2, 4, 8, 16, 32];
 
 export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   stage: Stage;
@@ -42,7 +42,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
     let last = performance.now();
     let acc = 0;
     const STEP = 1 / 240;
-    const BASE = 60 * 0.4; // замедленная симуляция
+    const BASE = 60 * 0.05; // базовая скорость ×1 — замедлена в 8 раз
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
@@ -133,6 +133,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                     style={{ borderColor: tire.color, background: `${tire.color}33` }}>
                     <span className="absolute inset-[3px] rounded-full" style={{ background: `conic-gradient(${wearCol} ${wear * 3.6}deg, transparent 0)` }} />
                   </span>
+                  <span className="num text-[10px] font-bold w-9 text-right" style={{ color: wearCol }} title={`Износ шин ${wear}%`}>{isOut ? '' : `${wear}%`}</span>
                   <span className="font-bold w-12">{car.code}</span>
                   <span className="text-[#9fb0c4] truncate flex-1 text-[13px]">{car.name}</span>
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
@@ -160,6 +161,14 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
             <div className="space-y-2">
               {playerCars.map((car) => {
                 const scheduled = sim.pitScheduled(car.did);
+                const tire = compoundDef(sid, car.tire);
+                const wearPct = Math.min(100, Math.round((car.tireAge / tire.life) * 100));
+                const wearColor = wearPct > 85 ? '#ff6b4b' : wearPct > 60 ? '#ffc94d' : '#4ade80';
+                const lapsLeft = Math.max(0, sim.totalLaps - car.lap);
+                const burn = car.fuelMode === 'push' ? 1.55 : car.fuelMode === 'eco' ? 1.15 : 1.35;
+                const fuelLeft = car.fuel - lapsLeft * burn;
+                const fuelOk = fuelLeft >= 0;
+                const fuelPct = Math.min(100, Math.max(0, (car.fuel / (sim.totalLaps * 1.35)) * 100));
                 return (
                   <div key={car.did} className="border border-[#2a3442] bg-[#10151d] px-3 py-2">
                     <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -168,6 +177,23 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                       <span className="text-[11px] text-[#7f8da0]">P{car.pos}</span>
                       <span className="text-[11px] num text-[#9fb0c4]">{tireName(sid, car.tire)} · {car.tireAge} кр · t°{Math.round(car.tireTemp)}°</span>
                       <span className="ml-auto text-[10px] num text-[#5a6a80]">топливо {car.fuel.toFixed(0)} кг</span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[9px] uppercase tracking-widest text-[#7f8da0] w-14 shrink-0">Шины</span>
+                      <div className="flex-1 h-[7px] bg-[#0d1117] border border-[#232b37] overflow-hidden">
+                        <div className="h-full transition-all duration-300" style={{ width: `${wearPct}%`, background: `linear-gradient(90deg, ${wearColor}88, ${wearColor})` }} />
+                      </div>
+                      <span className="num text-[10px] font-bold w-10 text-right" style={{ color: wearColor }}>{car.status === 'run' ? `${wearPct}%` : '—'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[9px] uppercase tracking-widest text-[#7f8da0] w-14 shrink-0">Топливо</span>
+                      <div className="flex-1 h-[7px] bg-[#0d1117] border border-[#232b37] overflow-hidden">
+                        <div className="h-full transition-all duration-300" style={{ width: `${fuelPct}%`, background: fuelOk ? '#5c9eff' : '#ff6b4b' }} />
+                      </div>
+                      <span className="num text-[10px] font-bold w-[86px] text-right" style={{ color: fuelOk ? '#5c9eff' : '#ff6b4b' }}
+                        title={`Осталось ${lapsLeft} кругов, расход ${burn} кг/круг`}>
+                        {car.status === 'run' ? (fuelOk ? `+${fuelLeft.toFixed(0)} кг` : `−${Math.abs(fuelLeft).toFixed(0)} кг!`) : '—'}
+                      </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                       <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Пит:</span>

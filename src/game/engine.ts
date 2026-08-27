@@ -1410,24 +1410,6 @@ export class RaceSim {
     return Math.max(lap, baseLap(c, this.gs.playerSeries) * 0.8);
   }
 
-  /** Реальная потеря времени на пит-стопе: машина ползёт по пит-лейну и теряет позиции */
-  completePit(car: SimCar) {
-    const loss = this.pitLoss(car);
-    car.pitCrawl = loss;
-    car.pitLap = true;
-    const stintIdx = car.pitLaps.indexOf(car.lap - 1);
-    const planTire = this.raining ? (car.tire === 'AW' ? 'AW' : 'I') : car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] ?? car.tire;
-    const nextTire = car.pendingTire ?? planTire;
-    car.pendingTire = null;
-    const servedPen = car.penQueue.reduce((s, p) => s + p, 0);
-    if (servedPen > 0) { car.pitCrawl += servedPen; this.event(car.lap, `${car.code}: отбыт штраф ${servedPen} с на пит-стопе`, 'pit'); car.penQueue = []; }
-    this.event(car.lap, `${car.code} — пит-стоп: ${tireName(this.gs.playerSeries, car.tire)} → ${tireName(this.gs.playerSeries, nextTire)} (~${loss.toFixed(0)} с)`, 'pit');
-    car.tire = nextTire;
-    car.tireAge = 0;
-    car.tireTemp = 62;
-    car.pitting = false;
-  }
-
   /** Ф1: 18–25 с под зелёными; остальные серии 30–40 с; под SC/VSC — вдвое меньше */
   pitLoss(car: SimCar): number {
     const mech = this.gs.teams[car.tid].staffIds[2];
@@ -1472,6 +1454,12 @@ export class RaceSim {
       for (let rank = 0; rank < sorted.length; rank++) {
         const car = sorted[rank];
         if (car.status !== 'run') continue;
+        // машина в боксах (под SC) — стоит, не участвует в построении пелотона
+        if (car.pitCrawl > 0) {
+          car.pitCrawl -= dt;
+          if (car.pitCrawl <= 0) { car.pitting = false; this.event(car.lap, `${car.code} возвращается на трассу`, 'pit'); }
+          continue;
+        }
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
         const target = rank === 0 ? Infinity : prevDist - gap;
@@ -1489,15 +1477,18 @@ export class RaceSim {
       const phaseMod = this.phase === 'cheq' ? 0 : 1;
       for (const car of this.cars) {
         if (car.status !== 'run' || this.phase === 'cheq') continue;
+        // машина в боксах: стоит на месте, пока не отсчитается время пит-стопа
+        if (car.pitCrawl > 0) {
+          car.pitCrawl -= dt;
+          if (car.pitCrawl <= 0) {
+            car.pitting = false;
+            this.event(car.lap, `${car.code} возвращается на трассу`, 'pit');
+          }
+          continue;
+        }
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
-        let speed = (this.track.total / car.targetLap) * f * phaseMod;
-        // пит-стоп: машина ползёт по пит-лейну, реально теряя время и позиции
-        if (car.pitting && car.pitCrawl > 0) {
-          speed *= 0.35;
-          car.pitCrawl -= dt;
-          if (car.pitCrawl <= 0) this.completePit(car);
-        }
+        const speed = (this.track.total / car.targetLap) * f * phaseMod;
         car.dist += speed * dt;
         while (car.dist - car.lapStartDist >= this.track.total) this.cross(car);
       }
@@ -1549,27 +1540,32 @@ export class RaceSim {
     });
   }
 
+  /** Начало пит-стопа: машина заезжает в боксы, шины меняются сразу, затем она стоит pitCrawl секунд */
+  beginPit(car: SimCar) {
+    car.pitting = true;
+    car.pitLap = true; // текущий круг — «грязный» (не в зачёт лучшего)
+    car.pitCrawl = this.pitLoss(car);
+    const stintIdx = car.pitLaps.indexOf(car.lap - 1);
+    const planTire = this.raining ? (car.tire === 'AW' ? 'AW' : 'I') : car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] ?? car.tire;
+    const nextTire = car.pendingTire ?? planTire;
+    car.pendingTire = null;
+    const servedPen = car.penQueue.reduce((s, p) => s + p, 0);
+    if (servedPen > 0) { car.pitCrawl += servedPen; this.event(car.lap, `${car.code}: отбыт штраф ${servedPen} с на пит-стопе`, 'pit'); car.penQueue = []; }
+    this.event(car.lap, `${car.code} свернул на пит-лейн: ${tireName(this.gs.playerSeries, car.tire)} → ${tireName(this.gs.playerSeries, nextTire)} (~${car.pitCrawl.toFixed(0)} с)`, 'pit');
+    car.tire = nextTire;
+    car.tireAge = 0;
+    car.tireTemp = 62;
+  }
+
   cross(car: SimCar) {
     car.lapStartDist += this.track.total;
-    let lapTime = this.t - car.lapStartT;
+    const lapTime = this.t - car.lapStartT;
     car.lapStartT = this.t;
     car.lap++;
-    if (car.pitting) {
-      lapTime += this.pitLoss(car);
-      const stintIdx = car.pitLaps.indexOf(car.lap - 1);
-      const planTire = this.raining ? (car.tire === 'AW' ? 'AW' : 'I') : car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] ?? car.tire;
-      const nextTire = car.pendingTire ?? planTire;
-      car.pendingTire = null;
-      const servedPen = car.penQueue.reduce((s, p) => s + p, 0);
-      if (servedPen > 0) { lapTime += servedPen; this.event(car.lap, `${car.code}: отбыт штраф ${servedPen} с на пит-стопе`, 'pit'); car.penQueue = []; }
-      this.event(car.lap, `${car.code} — пит-стоп: ${tireName(this.gs.playerSeries, car.tire)} → ${tireName(this.gs.playerSeries, nextTire)}`, 'pit');
-      car.tire = nextTire;
-      car.tireAge = 0;
-      car.tireTemp = 62;
-      car.pitting = false;
-    }
     car.lastLap = lapTime;
-    if (this.phase === 'green' && (car.bestLap == null || lapTime < car.bestLap)) car.bestLap = lapTime;
+    // круг, в который вошёл простой пит-стопа, не идёт в зачёт лучшего
+    if (this.phase === 'green' && !car.pitLap && (car.bestLap == null || lapTime < car.bestLap)) car.bestLap = lapTime;
+    car.pitLap = false;
     const cd = compoundDef(this.gs.playerSeries, car.tire);
     if (car.tireAge > cd.life * 1.9 && rnd() < 0.12 && !['AW', 'I', 'W'].includes(car.tire)) {
       return this.retire(car, 'Прокол — гонка окончена');
@@ -1596,7 +1592,7 @@ export class RaceSim {
     }
     this.rollIncidents(car);
     this.aiDecide(car);
-    if (car.pitLaps.includes(car.lap)) car.pitting = true;
+    if (car.pitLaps.includes(car.lap)) this.beginPit(car);
     this.updateTireTemp(car);
     car.fuel = Math.max(0, car.fuel - (car.fuelMode === 'eco' ? 1.15 : car.fuelMode === 'push' ? 1.55 : 1.35));
     if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
@@ -2027,9 +2023,16 @@ export function startNego(gs: GameState, did: string): string | null {
   if (!d) return 'Пилот не найден';
   if (d.teamId === gs.playerTeamId) return 'Это ваш пилот';
   const standing = Object.entries(gs.series[gs.playerSeries].tStand).sort((a, b) => b[1] - a[1]).findIndex(([tid]) => tid === gs.playerTeamId);
+  // престиж серии: пилот не хочет спускаться ниже, но охотно поднимается выше
+  const tierRank: Record<SeriesId, number> = { f1: 5, f2: 4, indy: 4, f3: 3, fe: 3 };
+  const dTier = tierRank[d.seriesId ?? 'f3'];
+  const pTier = tierRank[gs.playerSeries];
+  const tierPen = (pTier - dTier) * 22;
+  // звёзды не идут в слабые команды — требуемая репутация растёт с классом пилота
+  const starPen = d.pace > 88 && gs.reputation < 75 ? (d.pace - 88) * 4 : 0;
   const interest = clamp(
-    Math.round(38 + gs.reputation * 0.45 - d.value / 900_000 + (standing >= 0 ? (6 - Math.min(standing, 6)) * 4 : 0) + (d.form - 70) * 0.3),
-    15, 92,
+    Math.round(38 + gs.reputation * 0.45 - d.value / 900_000 + (standing >= 0 ? (6 - Math.min(standing, 6)) * 4 : 0) + (d.form - 70) * 0.3 + tierPen - starPen),
+    5, 92,
   );
   const askSalary = Math.round(Math.max(d.salary, d.value * 0.08) * (1.1 + rnd() * 0.4));
   const askBonus = Math.round(d.value * (0.06 + rnd() * 0.09));
@@ -2145,6 +2148,7 @@ export function generateSponsors(gs: GameState): Sponsor[] {
       { type: 'pts_per_round', target: tier === 'title' ? 25 : 15, label: `${tier === 'title' ? 25 : 15}+ очков команды за этап` },
       { type: 'podium', target: tier === 'title' ? 8 : 4, label: `${tier === 'title' ? 8 : 4}+ подиумов за сезон` },
       { type: 'top10', target: 12, label: 'Обе машины в топ-10 этапа' },
+      { type: 'constructor_pos', target: tier === 'title' ? 3 : 6, label: `Место не ниже P${tier === 'title' ? 3 : 6} в Кубке конструкторов` },
     ];
     const goal = goalPool[(i + gs.seasonN) % goalPool.length];
     return {

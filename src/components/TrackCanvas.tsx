@@ -2,6 +2,39 @@ import { useEffect, useRef } from 'react';
 import type { RaceSim, SessionSim } from '../game/engine';
 import type { TrackGeo } from '../game/types';
 
+/** Болид вид сверху: нос вперёд (+X), переднее/заднее крылья, кокпит, 4 колеса */
+function drawCarTop(ctx: CanvasRenderingContext2D, L: number, color: string, dimmed: boolean) {
+  const body = dimmed ? '#5a6a7e' : color;
+  // переднее и заднее крылья
+  ctx.fillStyle = body;
+  ctx.fillRect(L * 0.70, -L * 0.55, L * 0.16, L * 1.1);
+  ctx.fillRect(-L * 0.92, -L * 0.5, L * 0.18, L * 1.0);
+  // корпус: нос → понтоны → корма
+  ctx.beginPath();
+  ctx.moveTo(L * 0.95, 0);
+  ctx.lineTo(L * 0.55, L * 0.14);
+  ctx.lineTo(L * 0.35, L * 0.3);
+  ctx.lineTo(-L * 0.55, L * 0.3);
+  ctx.lineTo(-L * 0.75, L * 0.22);
+  ctx.lineTo(-L * 0.75, -L * 0.22);
+  ctx.lineTo(-L * 0.55, -L * 0.3);
+  ctx.lineTo(L * 0.35, -L * 0.3);
+  ctx.lineTo(L * 0.55, -L * 0.14);
+  ctx.closePath();
+  ctx.fill();
+  // кокпит
+  ctx.fillStyle = 'rgba(8,12,18,0.85)';
+  ctx.beginPath();
+  ctx.ellipse(L * 0.08, 0, L * 0.26, L * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // колёса
+  ctx.fillStyle = '#181b22';
+  ctx.fillRect(L * 0.40, -L * 0.58, L * 0.30, L * 0.2);
+  ctx.fillRect(L * 0.40, L * 0.38, L * 0.30, L * 0.2);
+  ctx.fillRect(-L * 0.74, -L * 0.58, L * 0.32, L * 0.2);
+  ctx.fillRect(-L * 0.74, L * 0.38, L * 0.32, L * 0.2);
+}
+
 function posAt(track: TrackGeo, dist: number): { x: number; y: number; a: number } {
   const total = track.total;
   const d = ((dist % total) + total) % total;
@@ -151,17 +184,10 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
           ctx.save();
           ctx.translate(X, Y);
           ctx.rotate(a);
-          const L = (car.isPlayer ? 12 : 10) * sc;
+          const L = (car.isPlayer ? 13 : 11) * sc;
           if (leader) { ctx.shadowColor = seriesColor; ctx.shadowBlur = 14 + pulse * 6; }
           else if (car.isPlayer) { ctx.shadowColor = '#d8f224'; ctx.shadowBlur = 10; }
-          ctx.fillStyle = car.status === 'fin' ? '#5a6a7e' : car.color;
-          ctx.beginPath();
-          ctx.moveTo(L, 0);
-          ctx.lineTo(-L * 0.7, L * 0.55);
-          ctx.lineTo(-L * 0.4, 0);
-          ctx.lineTo(-L * 0.7, -L * 0.55);
-          ctx.closePath();
-          ctx.fill();
+          drawCarTop(ctx, L, car.color, car.status === 'fin');
           ctx.restore();
           if (leader || car.isPlayer) {
             ctx.font = `700 ${Math.max(9, 10 * sc)}px Orbitron, sans-serif`;

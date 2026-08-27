@@ -152,7 +152,7 @@ function supplierPowerSafe(t: import('../game/types').Team): number {
 
 /* ================= ХАБ ================= */
 
-type HubTab = 'calendar' | 'standings' | 'garage' | 'power' | 'market' | 'editor' | 'saves' | 'news';
+type HubTab = 'calendar' | 'standings' | 'garage' | 'power' | 'market' | 'sponsors' | 'editor' | 'saves' | 'news';
 
 export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
   onStartWeekend: () => void; onResumeWeekend: () => void; onEndSeason: () => void;
@@ -183,6 +183,7 @@ export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
     ['garage', 'garage', 'Боксы'],
     ['power', 'bolt', 'Рейтинги'],
     ['market', 'swap', 'Трансферы'],
+    ['sponsors', 'doc', 'Спонсоры'],
     ['editor', 'edit', 'Редактор'],
     ['news', 'radio', 'Новости'],
     ['saves', 'save', 'Сэйвы'],
@@ -250,6 +251,7 @@ export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
         {tab === 'garage' && <GarageTab />}
         {tab === 'power' && <PowerTab />}
         {tab === 'market' && <MarketTab />}
+        {tab === 'sponsors' && <SponsorsTab />}
         {tab === 'editor' && <EditorTab />}
         {tab === 'news' && <NewsTab />}
         {tab === 'saves' && <SavesTab />}
@@ -877,6 +879,66 @@ function StaffRow({ s }: { s: Staff }) {
             onClick={() => dispatch({ type: 'CANCEL_STAFF_NEGO', sid: s.id })}>ПРЕРВАТЬ</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---- Спонсоры ---- */
+function SponsorsTab() {
+  const { gs } = useGame();
+  const meta = SERIES_META[gs.playerSeries];
+  const totalRounds = gs.series[gs.playerSeries].rounds.length;
+  const tierName: Record<string, string> = { title: 'Титульный', major: 'Главный', partner: 'Партнёр' };
+  const tierColor: Record<string, string> = { title: '#ffd75c', major: '#d8f224', partner: '#5c9eff' };
+  const active = gs.sponsors.filter((s) => s.active);
+  const lost = gs.sponsors.filter((s) => !s.active);
+  const totalActive = active.reduce((s, x) => s + x.value, 0);
+  return (
+    <div className="space-y-4">
+      <Panel title="Спонсорские контракты" accent right={
+        <span className="font-disp text-[11px] text-[#d8f224] num">{money(totalActive)}/сезон</span>
+      }>
+        <p className="text-[12px] text-[#7f8da0] mb-4">
+          Каждый спонсор платит за сезон и ставит цель. Выполняйте её по ходу этапов — получите бонус и сохраните контракт.
+          Провал цели снижает выплаты и доверие; систематические провалы ведут к расторжению.
+        </p>
+        <div className="grid lg:grid-cols-2 gap-3">
+          {active.map((s) => {
+            const isSeasonGoal = s.goal.type === 'constructor_pos';
+            const prog = isSeasonGoal ? (s.goal.seasonMet ? 1 : 0) : totalRounds ? s.goal.roundsMet / totalRounds : 0;
+            const pct = Math.round(prog * 100);
+            return (
+              <div key={s.id} className="border border-[#2a3442] bg-[#10151d] p-3.5">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-bold text-[14px] flex-1">{s.name}</span>
+                  <span className="font-disp text-[9px] font-bold px-1.5 py-0.5" style={{ color: '#0d1016', background: tierColor[s.tier] }}>{tierName[s.tier]}</span>
+                </div>
+                <div className="text-[12px] text-[#9fb0c4] mb-2">{s.goal.label}</div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex-1 h-[7px] bg-[#0d1117] border border-[#232b37] overflow-hidden">
+                    <div className="h-full transition-all" style={{ width: `${pct}%`, background: meta.color }} />
+                  </div>
+                  <span className="num text-[11px] font-bold text-[#e7edf4] w-10 text-right">
+                    {isSeasonGoal ? (s.goal.seasonMet ? '✓' : '…') : `${s.goal.roundsMet}/${totalRounds}`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] num">
+                  <span className="text-[#d8f224] font-bold">{money(s.value)}/год</span>
+                  <span className="text-[#7f8da0]">{isSeasonGoal ? 'итог в конце сезона' : `выполнено на ${pct}%`}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {lost.length > 0 && (
+          <div className="mt-4">
+            <div className="font-disp text-[10px] font-bold tracking-[0.18em] text-[#ff6b4b] mb-2 uppercase">Расторгнуты</div>
+            {lost.map((s) => (
+              <div key={s.id} className="text-[12px] text-[#5a6a80] line-through">{s.name} · {s.goal.label}</div>
+            ))}
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }
