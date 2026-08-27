@@ -734,7 +734,6 @@ function DriverRow({ d }: { d: Driver }) {
         <span className="text-[11px] text-[#5a6a80] num">{d.age} лет</span>
         {d.retiring && <span className="text-[10px] font-disp font-bold text-[#ff6b4b] border border-[#ff6b4b] px-1.5 py-0.5">УХОДИТ ПОСЛЕ СЕЗОНА</span>}
         <span className="ml-auto flex items-center gap-2">
-          <span className="num text-[12px] text-[#d8f224]">{money(d.value)}</span>
           {!mine && !hasDeal && !nego && (
             <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#2a3442] hover:border-[#d8f224] hover:text-[#d8f224] transition-colors"
               onClick={() => { dispatch({ type: 'START_NEGO', did: d.id }); setOpen(true); }}>ПЕРЕГОВОРЫ</button>

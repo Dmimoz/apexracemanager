@@ -1469,8 +1469,8 @@ export class RaceSim {
       : style > 0.66 ? 'aggr' : style < 0.33 ? 'cons' : 'balanced';
     // коэффициент износа от режима (синхронно с wearPerLap)
     const modeF = mode === 'aggr' ? 1.55 : mode === 'cons' ? 0.6 : 1;
-    // эффективный ресурс состава в кругах при данном режиме (целимся на 90% износа к концу stint)
-    const effLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.9 / modeF);
+    // эффективный ресурс состава в кругах при данном режиме (целимся на ~78% износа к концу stint — до зоны проколов)
+    const effLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.78 / modeF);
 
     if (wet) return { startTire: rainTire, stints: [], pitLaps: [], mode };
     if (isPlayer) {
@@ -1829,7 +1829,7 @@ export class RaceSim {
       return;
     }
     // под машиной безопасности пит «почти бесплатный» — ИИ переносит дальний стоп на этот круг
-    if ((this.phase === 'sc' || this.phase === 'vsc') && car.lap < this.totalLaps - 3 && wear > 0.35 && rnd() < 0.8) {
+    if ((this.phase === 'sc' || this.phase === 'vsc') && wear > 0.4 && car.lap < this.totalLaps - 4) {
       if (nextPlanned == null || nextPlanned - car.lap > 2) {
         car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
         car.pitLaps.push(car.lap + 1);
@@ -1839,9 +1839,26 @@ export class RaceSim {
     }
     // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финища
     const projectedEnd = wear + lapsLeft * wpl;
-    if (projectedEnd > 0.7 && car.lap < this.totalLaps - 2) {
-      const lapsTo70 = wpl > 0 ? Math.floor((0.7 - wear) / wpl) : lapsLeft;
-      const desired = car.lap + clamp(lapsTo70, 1, lapsLeft - 1);
+    // дотягивает до финиша с износом <=80% — пит не нужен
+    if (projectedEnd <= 0.8) return;
+    // финиш близко — пит-стоп чистый проигрыш, дотягиваем в щадящем режиме
+    if (lapsLeft <= 6) {
+      if (car.mode !== 'cons') { car.mode = 'cons'; this.event(car.lap, `${car.code} дотягивает на изношенной резине — экономит`, 'info'); }
+      return;
+    }
+    // сначала пробуем сэкономить режимом: «беречь шины» снижает износ до ×0.6
+    if (car.mode !== 'cons') {
+      const wplCons = wpl * (0.6 / (car.mode === 'aggr' ? 1.55 : 1));
+      if (wear + lapsLeft * wplCons <= 0.8) {
+        car.mode = 'cons';
+        this.event(car.lap, `${car.code} бережёт резину — щадящий режим`, 'info');
+        return;
+      }
+    }
+    // иначе планируем ровно один стоп — на круге, где износ достигнет ~75%
+    if (car.lap < this.totalLaps - 6) {
+      const lapsTo75 = wpl > 0 ? Math.floor((0.75 - wear) / wpl) : lapsLeft;
+      const desired = car.lap + clamp(lapsTo75, 1, lapsLeft - 1);
       if (nextPlanned == null) {
         car.pitLaps.push(desired);
         this.event(car.lap, `${car.code}: пит-стоп через ${desired - car.lap} круг(а) — беречь резину`, 'pit');
@@ -2010,9 +2027,10 @@ export function makeRaceSim(gs: GameState, kind: SimKind, grid: string[], circui
 /* ================= ПРИМЕНЕНИЕ РЕЗУЛЬТАТОВ ================= */
 
 export function applySession(gs: GameState, sim: SessionSim | RaceSim, stage: Stage) {
-  if (sim instanceof RaceSim) return applyRace(gs, sim, stage);
-  if (stage === 'quali' || stage === 'sq') return applyQualiSim(gs, sim, stage);
-  return applyPracticeSim(gs, sim, stage);
+  // тип симуляции определяем по стадии (instanceof ненадёжен после hot-reload модуля)
+  if (isRaceLikeStage(stage)) return applyRace(gs, sim as RaceSim, stage);
+  if (stage === 'quali' || stage === 'sq') return applyQualiSim(gs, sim as SessionSim, stage);
+  return applyPracticeSim(gs, sim as SessionSim, stage);
 }
 
 export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {

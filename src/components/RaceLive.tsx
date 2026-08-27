@@ -39,6 +39,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   const pausedRef = useRef(false);
   pausedRef.current = paused;
   const prevPhaseRef = useRef<string>('green');
+  const appliedRef = useRef(false); // гарантия однократного применения результатов
 
   useEffect(() => {
     if (!started) return;
@@ -62,7 +63,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
       }
       force((x) => (x + 1) % 1000000);
       if (s.done) {
-        dispatch({ type: 'APPLY_SESSION', sim: s, stage });
+        if (!appliedRef.current) {
+          appliedRef.current = true;
+          dispatch({ type: 'APPLY_SESSION', sim: s, stage });
+        }
         onDone();
         return;
       }

@@ -55,7 +55,10 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
   pausedRef.current = paused;
   const lastSegRef = useRef<string>('');
 
+  const appliedRef = useRef(false); // гарантия однократного применения результатов
   const finish = () => {
+    if (appliedRef.current) { onDone(); return; }
+    appliedRef.current = true;
     dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
     onDone();
   };
