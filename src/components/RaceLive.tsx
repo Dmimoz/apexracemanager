@@ -1,0 +1,223 @@
+import { useEffect, useRef, useState } from 'react';
+import { useGame } from '../game/GameContext';
+import { SERIES_META } from '../game/data';
+import type { Stage, StrategyPreset } from '../game/types';
+import {
+  circuitOfRound, compoundDef, fmtLap, getTrack, gridForStage, makeRaceSim, stageTitle, tireName,
+} from '../game/engine';
+import type { RaceSim } from '../game/engine';
+import TrackCanvas from './TrackCanvas';
+import { Btn, FlagTag, Icon } from './ui';
+
+const SPEEDS = [1, 2, 4, 8, 16];
+
+export default function RaceLive({ stage, startTires, onDone, onAbort }: {
+  stage: Stage;
+  startTires: Record<string, string>;
+  onDone: () => void;
+  onAbort: () => void;
+}) {
+  const { gs, dispatch } = useGame();
+  const sid = gs.playerSeries;
+  const meta = SERIES_META[sid];
+  const w = gs.weekend!;
+  const circuit = circuitOfRound(gs, sid, w.roundIdx);
+  const grid = gridForStage(gs, stage);
+  const [sim] = useState<RaceSim>(() => makeRaceSim(
+    gs, stage === 'race' ? 'race' : stage === 'sprint' ? 'sprint' : 'sprintRev',
+    grid, circuit, w.weather[stage] === 'wet', w.rainMidRace, startTires,
+  ));
+  const [started, setStarted] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const simRef = useRef(sim);
+  simRef.current = sim;
+  const [, force] = useState(0);
+  const track = getTrack(circuit);
+
+  useEffect(() => {
+    if (!started) return;
+    let raf = 0;
+    let last = performance.now();
+    let acc = 0;
+    const STEP = 1 / 240;
+    const BASE = 60 * 0.4; // замедленная симуляция
+    const loop = (now: number) => {
+      const dtReal = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      acc += dtReal * BASE * speedRef.current;
+      while (acc > STEP) { simRef.current.tick(STEP); acc -= STEP; }
+      force((x) => (x + 1) % 1000000);
+      if (simRef.current.done) {
+        dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
+        onDone();
+        return;
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [started]);
+
+  if (!started) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="panel clip p-8 max-w-2xl w-full reveal">
+          <div className="checker h-2 mb-6" />
+          <div className="font-disp text-[11px] tracking-[0.3em] text-[#7f8da0] mb-1">{stageTitle(gs, stage).toUpperCase()} · {circuit.country}</div>
+          <h1 className="font-disp font-black text-3xl mb-1">{circuit.name.toUpperCase()}</h1>
+          <div className="text-[13px] text-[#9fb0c4] mb-5 num">{sim.totalLaps} кругов · {circuit.lenKm} км · {grid.length} машин</div>
+          <div className="mb-5 text-[12px] text-[#9fb0c4] border-l-2 pl-3 space-y-1" style={{ borderColor: meta.color }}>
+            <p>Управляйте своими машинами с пит-уолла: пит-стопы, режим гонки, топливо, командные приказы.</p>
+            <p>Следите за машиной безопасности, флагами и износом шин.</p>
+          </div>
+          <div className="flex gap-3">
+            <Btn variant="acc" onClick={() => setStarted(true)}><Icon name="play" />СТАРТ</Btn>
+            <Btn onClick={onAbort}><Icon name="back" />Назад к уик-энду</Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const cars = [...sim.cars].sort((a, b) => a.pos - b.pos);
+  const leader = cars.find((c) => c.pos === 1);
+  const playerCars = cars.filter((c) => c.isPlayer);
+  const slicks = SERIES_META[sid].compounds.filter((c) => !['I', 'W'].includes(c.id));
+  const wetTires = SERIES_META[sid].compounds.filter((c) => ['I', 'W', 'AW'].includes(c.id));
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden">
+      <header className="flex items-center justify-between px-4 py-2 border-b border-[#252e3b] bg-[#0d1117cc] shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="font-disp font-black text-lg text-[#ff2d2d]">APEX</span>
+          <span className="font-disp text-[11px] tracking-[0.2em] text-[#9fb0c4]">{stageTitle(gs, stage)} · {circuit.name}</span>
+          <span className="font-disp text-[11px] font-bold px-2.5 py-0.5" style={{ background: meta.color, color: '#0d1016' }}>
+            КРУГ {Math.min((leader?.lap ?? 0) + 1, sim.totalLaps)}/{sim.totalLaps}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] font-disp font-bold tracking-widest text-[#5a6a80] mr-1">СКОРОСТЬ</span>
+          {SPEEDS.map((m) => (
+            <button key={m} onClick={() => setSpeed(m)}
+              className={`px-2 py-0.5 border font-disp text-[10px] font-bold transition-all ${speed === m ? 'bg-[#d8f224] text-[#10131a] border-[#d8f224]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+              ×{m}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <div className="flex flex-1 min-h-0">
+        {/* ЛЕВО: крупная таблица отрывов */}
+        <aside className="w-[46%] shrink-0 border-r border-[#252e3b] bg-[#0d1117] flex flex-col min-h-0">
+          <div className="px-3 py-2 border-b border-[#1d242f] flex items-center justify-between shrink-0">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-[#7f8da0] font-semibold">Тайминг · отрывы</span>
+            <span className="text-[9px] text-[#5a6a80]">отрыв | посл. круг</span>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {cars.map((car) => {
+              const team = gs.teams[car.tid];
+              const tire = compoundDef(sid, car.tire);
+              const isOut = car.status === 'out';
+              const wear = Math.min(100, Math.round((car.tireAge / tire.life) * 100));
+              const wearCol = wear > 85 ? '#ff6b4b' : wear > 60 ? '#ffc94d' : '#4ade80';
+              const isPurple = car.lastLap != null && car.bestLap != null && car.lastLap <= car.bestLap + 0.001;
+              return (
+                <div key={car.did}
+                  className={`flex items-center gap-2.5 px-3 py-[7px] border-l-[3px] text-[14px] transition-colors ${car.isPlayer ? 'bg-[#1a2230]' : 'hover:bg-[#141a23]'} ${isOut ? 'opacity-40' : ''}`}
+                  style={{ borderLeftColor: team.color }}>
+                  <span className="font-disp font-bold w-8 text-[13px] text-[#9fb0c4]">{isOut ? '—' : car.pos}</span>
+                  <span className="w-4 h-4 shrink-0 rounded-full border-2 relative" title={`${tire.name} · износ ${wear}%`}
+                    style={{ borderColor: tire.color, background: `${tire.color}33` }}>
+                    <span className="absolute inset-[3px] rounded-full" style={{ background: `conic-gradient(${wearCol} ${wear * 3.6}deg, transparent 0)` }} />
+                  </span>
+                  <span className="font-bold w-12">{car.code}</span>
+                  <span className="text-[#9fb0c4] truncate flex-1 text-[13px]">{car.name}</span>
+                  {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
+                  {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
+                  <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
+                    {isOut ? 'СХОД' : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
+                  </span>
+                  <span className={`num w-[86px] text-right text-[13px] ${isPurple ? 'text-[#c884ff] font-bold' : 'text-[#7f8da0]'}`}>
+                    {car.lastLap != null ? fmtLap(car.lastLap) : '—'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+
+        {/* ПРАВО: трасса + пит-уолл + события */}
+        <main className="flex-1 min-w-0 flex flex-col">
+          <div className="flex-1 min-h-0 relative">
+            <TrackCanvas sim={sim} track={track} seriesColor={meta.color} phase={sim.phase} raining={sim.raining} />
+          </div>
+
+          <div className="shrink-0 border-t border-[#252e3b] bg-[#0d1117] p-2.5 max-h-[42%] overflow-y-auto">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-[#7f8da0] px-1 mb-1.5 font-semibold">Пит-уолл — ваши машины</div>
+            <div className="space-y-2">
+              {playerCars.map((car) => {
+                const scheduled = sim.pitScheduled(car.did);
+                return (
+                  <div key={car.did} className="border border-[#2a3442] bg-[#10151d] px-3 py-2">
+                    <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                      <FlagTag nat={car.nat} />
+                      <span className="font-bold text-[13px]">{car.code}</span>
+                      <span className="text-[11px] text-[#7f8da0]">P{car.pos}</span>
+                      <span className="text-[11px] num text-[#9fb0c4]">{tireName(sid, car.tire)} · {car.tireAge} кр · t°{Math.round(car.tireTemp)}°</span>
+                      <span className="ml-auto text-[10px] num text-[#5a6a80]">топливо {car.fuel.toFixed(0)} кг</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                      <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Пит:</span>
+                      {[...slicks, ...wetTires].map((c) => (
+                        <button key={c.id} disabled={scheduled || car.pitting || car.status !== 'run'}
+                          onClick={() => { sim.boxCar(car.did, c.id); force((x) => x + 1); }}
+                          className="inline-flex items-center gap-1 border px-1.5 py-0.5 text-[11px] font-semibold transition-colors disabled:opacity-30 border-[#2a3442] hover:border-[#d8f224]"
+                          title={c.name}>
+                          <span className="w-2.5 h-2.5 rounded-full border-2" style={{ borderColor: c.color, background: `${c.color}33` }} />
+                          {c.short}
+                        </button>
+                      ))}
+                      {scheduled && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">ЗАЕЗЖАЕТ</span>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Режим:</span>
+                      {([['aggr', 'АТАКА'], ['balanced', 'БАЛАНС'], ['cons', 'БЕРЕЧЬ']] as [StrategyPreset, string][]).map(([m, label]) => (
+                        <button key={m} onClick={() => { sim.setMode(car.did, m); force((x) => x + 1); }}
+                          className={`px-2 py-0.5 text-[10px] font-bold border transition-colors ${car.mode === m ? 'bg-[#d8f224] text-[#10131a] border-[#d8f224]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+                          {label}
+                        </button>
+                      ))}
+                      <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] ml-2 mr-1">Топливо:</span>
+                      {([['push', 'ПУШ'], ['normal', 'НОРМА'], ['eco', 'ЭКО']] as const).map(([f, label]) => (
+                        <button key={f} onClick={() => { sim.setFuelMode(car.did, f); force((x) => x + 1); }}
+                          className={`px-2 py-0.5 text-[10px] font-bold border transition-colors ${car.fuelMode === f ? 'bg-[#5c9eff] text-[#0d1016] border-[#5c9eff]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+                          {label}
+                        </button>
+                      ))}
+                      <button onClick={() => { sim.orderLetThrough(car.did); force((x) => x + 1); }}
+                        disabled={car.letThrough || car.status !== 'run'}
+                        className="px-2 py-0.5 text-[10px] font-bold border border-[#2a3442] text-[#c884ff] hover:border-[#c884ff] disabled:opacity-30 transition-colors">
+                        ПРОПУСТИТЬ НАПАРНИКА
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-2 max-h-[90px] overflow-y-auto">
+              {[...sim.events].reverse().slice(0, 12).map((e, i) => (
+                <div key={sim.events.length - i} className="text-[11.5px] leading-tight px-1 py-0.5">
+                  <span className={e.kind === 'pit' ? 'text-[#7dc8ff]' : e.kind === 'sc' ? 'text-[#ffc94d]' : e.kind === 'red' ? 'text-[#ff6b4b]' : e.kind === 'crash' ? 'text-[#ff9a5c]' : 'text-[#9fb0c4]'}>{e.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
