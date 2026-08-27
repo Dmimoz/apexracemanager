@@ -164,6 +164,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   <span className="text-[#9fb0c4] truncate flex-1 text-[13px]">{car.name}</span>
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
+                  {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
                     {isOut ? 'СХОД' : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
                   </span>
@@ -201,7 +202,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                       <FlagTag nat={car.nat} />
                       <span className="font-bold text-[13px]">{car.code}</span>
                       <span className="text-[11px] text-[#7f8da0]">P{car.pos}</span>
-                      <span className="text-[11px] num text-[#9fb0c4]">{tireName(sid, car.tire)} · {car.tireAge} кр · t°{Math.round(car.tireTemp)}°</span>
+                      <span className="text-[11px] num text-[#9fb0c4]">{tireName(sid, car.tire)} · {car.tireAge} кр</span>
                       <span className="ml-auto text-[10px] num text-[#5a6a80]">топливо {car.fuel.toFixed(0)} кг</span>
                     </div>
                     <div className="flex items-center gap-2 mb-1">

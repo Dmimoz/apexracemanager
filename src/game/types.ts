@@ -125,6 +125,8 @@ export interface GameState {
   staffNegos: Record<string, StaffNegotiation>; staffDeals: StaffDeal[];
   programs: UpgradeProgram[];
   sponsors: Sponsor[]; ownerTrust: number; fired: boolean;
+  lastAdvice: Record<string, string>;  // последние советы пилотов по настройкам (после практик)
+  _aiUpdates?: Record<string, string[]>;  // накопленные обновления ИИ-команд к анонсу
 }
 
 export interface TrackGeo {

@@ -129,6 +129,28 @@ export function setupLapDelta(s: Setup, c: Circuit): number {
   return d;
 }
 
+export interface SetupTip { field: keyof Setup; label: string; current: number; suggested: number; confidence: number }
+
+/** Совет гоночного инженера перед практикой: по каждой настройке. Чем выше скилл инженера,
+ *  тем ближе предложенные значения к идеальным (autoSetup) и тем выше уверенность. */
+export function engineerSetupAdvice(gs: GameState, circuit: Circuit): { engineer: string; skill: number; tips: SetupTip[] } {
+  const t = playerTeam(gs);
+  const engId = t.staffIds[3] ?? t.staffIds[0];
+  const eng = gs.staff[engId];
+  const skill = eng?.skill ?? 60;
+  const ideal = autoSetup(circuit);
+  const k = 0.35 + (skill / 100) * 0.6; // 0.35..0.95 — доля «видения» идеала
+  const firstDriver = driversOfTeam(gs, t.id)[0]?.id;
+  const labels: Record<keyof Setup, string> = { aero: 'Прижим', mech: 'Мех. зацеп', tires: 'Давление шин', brake: 'Торм. баланс', diff: 'Дифференциал' };
+  const tips: SetupTip[] = (Object.keys(labels) as (keyof Setup)[]).map((f) => {
+    const cur = firstDriver ? driverSetup(gs, firstDriver)[f] : 50;
+    const err = (1 - k) * 18 * (rnd() * 2 - 1); // неточность тем выше, чем ниже скилл
+    const suggested = clamp(Math.round(ideal[f] + err), 15, 85);
+    return { field: f, label: labels[f], current: cur, suggested, confidence: Math.round(skill * 0.9 + rnd() * 10) };
+  });
+  return { engineer: eng?.name ?? 'Инженер', skill, tips };
+}
+
 export function setupWearMult(s: Setup): number {
   const press = (s.tires - 50) / 50;
   const df = (s.aero - 50) / 50;
@@ -535,6 +557,7 @@ export function newCareer(seriesId: SeriesId, teamId: string): GameState {
     mods: { puLimitBonus: 0, degMod: 1, drsMod: 1, payMod: 1, capMod: 1 },
     negos: {}, deals: [], staffNegos: {}, staffDeals: [], programs: [],
     sponsors: [], ownerTrust: 60 + Math.round(teams[teamId].reputation * 0.3), fired: false,
+    lastAdvice: {},
   };
   // настройки по умолчанию для каждого пилота
   for (const t of Object.values(gs.teams)) {
@@ -587,6 +610,37 @@ function aiFitComponents(gs: GameState, w: Weekend) {
       t.wear = 12;
     }
   }
+}
+
+const UPG_AREA_NAMES: Record<string, string> = { aero: 'новое переднее крыло', chassis: 'обновлённое днище', power: 'форсированный мотор', tires: 'улучшенную работу с резиной' };
+
+/** ИИ-команды развивают болиды (только в сериях, где разрешены апгрейды) */
+function aiDevelopment(gs: GameState) {
+  const sid = gs.playerSeries;
+  const meta = SERIES_META[sid];
+  if (meta.specCar) return; // единая спецификация — развивать нечего
+  for (const t of Object.values(gs.teams)) {
+    if (t.seriesId !== sid || t.id === gs.playerTeamId) continue;
+    if (rnd() < 0.4) {
+      const areas: UpgradeArea[] = t.works ? ['aero', 'chassis', 'power', 'tires'] : ['aero', 'chassis', 'tires'];
+      const area = pick(areas);
+      const gain = 0.3 + rnd() * 0.7;
+      t[area] = clamp((t[area] ?? 60) + gain, 0, 99);
+      gs._aiUpdates = gs._aiUpdates ?? {};
+      gs._aiUpdates[t.id] = gs._aiUpdates[t.id] ?? [];
+      gs._aiUpdates[t.id].push(UPG_AREA_NAMES[area]);
+    }
+  }
+}
+
+/** Публикует анонс: какие обновления команды привезут на следующий уик-энд */
+export function announceUpdates(gs: GameState) {
+  const sid = gs.playerSeries;
+  if (SERIES_META[sid].specCar) return;
+  const ups = gs._aiUpdates ?? {};
+  const names = Object.entries(ups).map(([tid, list]) => `${gs.teams[tid]?.short}: ${(list as string[]).join(', ')}`).slice(0, 4);
+  if (names.length) pushNews(gs, `К следующему уик-энду команды готовят обновления — ${names.join('; ')}`, 'РАЗВИТИЕ');
+  gs._aiUpdates = {};
 }
 
 /* -------- сетки -------- */
@@ -816,7 +870,7 @@ export class SessionSim {
   events: { lap: number; text: string; kind: string }[] = [];
   playerSetup: Setup;
 
-  constructor(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wetSession: boolean) {
+  constructor(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wetSession: boolean, startTires?: Record<string, string>) {
     this.gs = gs;
     this.kind = kind;
     this.circuit = circuit;
@@ -856,6 +910,8 @@ export class SessionSim {
       });
       const car = this.cars[this.cars.length - 1];
       car.runLen = this.planRunLen(car);
+      // стартовый комплект, выбранный игроком (только на сухой трассе)
+      if (!this.wetSession && isPlayer && startTires?.[did]) car.tire = startTires[did];
       if (this.wetSession) car.tire = sid === 'fe' ? 'AW' : 'I';
     });
     this.event(0, kind === 'practice' ? 'Зелёный свет — практика началась' : `Зелёный свет — ${this.segment}`);
@@ -988,19 +1044,26 @@ export class SessionSim {
   }
 
   /** Совет пилота после серии кругов — на основе телеметрии настроек */
+  /** Совет пилота: чем больше кругов он проехал (tireAge), тем детальнее анализ (1–3 пункта) */
   makeAdvice(car: SessionCar): string {
     const c = this.circuit;
     const opt = autoSetup(c);
-    const deltas: [keyof Setup, number][] = [
-      ['aero', opt.aero - car.setup.aero], ['mech', opt.mech - car.setup.mech], ['tires', opt.tires - car.setup.tires],
+    const raw: [keyof Setup, number, string][] = [
+      ['aero', opt.aero - car.setup.aero, 'прижим'],
+      ['mech', opt.mech - car.setup.mech, 'мех. зацеп'],
+      ['tires', opt.tires - car.setup.tires, 'давление шин'],
+      ['brake', opt.brake - car.setup.brake, 'торм. баланс'],
+      ['diff', opt.diff - car.setup.diff, 'дифференциал'],
     ];
+    const deltas = raw.filter((x) => Math.abs(x[1]) >= 6);
     deltas.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-    const [field, delta] = deltas[0];
-    if (Math.abs(delta) < 8) return `📻 ${car.code}: баланс отличный, машина едет сама`;
-    const dir = delta > 0 ? 'добавить' : 'убавить';
-    const label = field === 'aero' ? 'прижим' : field === 'mech' ? 'мех. зацеп' : 'давление шин';
-    const extra = car.tireAge > compoundDef(this.gs.playerSeries, car.tire).life * 0.6 ? '. Резина устаёт — нужен свежий комплект' : '';
-    return `📻 ${car.code}: нужно ${dir} ${label} на ~${Math.round(Math.abs(delta))}${extra}`;
+    // количество пунктов совета зависит от наката: 1 пункт с 1 круга, +1 за каждые 4 круга, до 3
+    const n = clamp(1 + Math.floor(car.tireAge / 4), 1, 3);
+    const parts = deltas.slice(0, n).map(([, delta, label]) =>
+      `${delta > 0 ? 'добавить' : 'убавить'} ${label} на ~${Math.round(Math.abs(delta))}`);
+    if (!parts.length) return `📻 ${car.code}: баланс отличный, машина едет сама`;
+    const extra = car.tireAge > compoundDef(this.gs.playerSeries, car.tire).life * 0.6 ? ' · резина устаёт — нужен свежий комплект' : '';
+    return `📻 ${car.code}: ${parts.join('; ')}${extra}`;
   }
 
   /** Обслуживание шин в боксах по выбранной программе */
@@ -1148,8 +1211,8 @@ export class SessionSim {
   }
 }
 
-export function makeSessionSim(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wet: boolean): SessionSim {
-  return new SessionSim(gs, kind, grid, circuit, wet);
+export function makeSessionSim(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wet: boolean, startTires?: Record<string, string>): SessionSim {
+  return new SessionSim(gs, kind, grid, circuit, wet, startTires);
 }
 
 function sessionRows(sim: SessionSim): TableRow[] {
@@ -1187,6 +1250,9 @@ function applyPracticeSim(gs: GameState, sim: SessionSim, stage: Stage) {
   const advice = setupAdvice(gs, sim.circuit, sim.wetSession);
   w.setupNotes = advice;
   if (advice[0]) notes.push(advice[0]);
+  // сохраняем последние советы пилотов — они остаются доступными после сессии (п.5)
+  gs.lastAdvice = gs.lastAdvice ?? {};
+  for (const car of sim.cars) if (car.isPlayer && car.advice) gs.lastAdvice[car.did] = car.advice.replace(/^📻\s*/, '');
   w.results[stage] = { stage, title: stageTitle(gs, stage), rows, notes };
   w.stageIdx++;
 }
@@ -1233,12 +1299,12 @@ export interface SimCar {
   plan: string[]; pitLaps: number[]; pitting: boolean;
   pendingTire: string | null;
   pitCrawl: number; pitLap: boolean;   // ползёт по пит-лейну; флаг «круг с питом» (не в зачёт лучшего)
+  pitCount: number;                    // сколько пит-стопов совершил (для тайминг-тауэра)
   penQueue: number[];
   drs: boolean; pos: number; gap: number; interval: number;
   skill: number; perf: number; cons: number; mode: StrategyPreset;
   setup: Setup; qualiSeg: string;
   finished: boolean;
-  tireTemp: number;
   fuelMode: 'eco' | 'normal' | 'push';
   letThrough: boolean; letThroughLaps: number;
   style: number;                        // индивидуальная агрессивность ИИ 0..1
@@ -1302,16 +1368,15 @@ export class RaceSim {
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
         lap: 0, dist: -i * 14 - (i % 2) * 7, targetLap: 0, lapStartT: 0, lapStartDist: -i * 14,
         lastLap: null, bestLap: null,
-        tire: plan.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * 1.35 * 1.06), damage: 0,
+        tire: plan.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * 1.5 * 1.05), damage: 0,
         status: 'run', outReason: '', finishT: 0,
         plan: plan.stints, pitLaps: plan.pitLaps, pitting: false,
-        pendingTire: null, pitCrawl: 0, pitLap: false,
+        pendingTire: null, pitCrawl: 0, pitLap: false, pitCount: 0,
         penQueue: [], drs: false, pos: i + 1, gap: 0, interval: 0,
         skill, perf, cons: d.consistency,
         mode: t.id === gs.playerTeamId ? gs.strategy[did] ?? 'balanced' : plan.mode,
         setup, qualiSeg: 'Q1',
         finished: false,
-        tireTemp: wetSession ? 55 : 74,
         fuelMode: t.id === gs.playerTeamId ? 'normal' : aiFuelMode(plan.mode, i),
         letThrough: false, letThroughLaps: 0,
         style,
@@ -1409,40 +1474,29 @@ export class RaceSim {
     if (this.events.length > 90) this.events.shift();
   }
 
-  tempWindow(car: SimCar): [number, number] {
-    const cd = compoundDef(this.gs.playerSeries, car.tire);
-    const soft = ['S', 'O', 'ALT'].includes(cd.id);
-    const base = soft ? 92 : ['H', 'P', 'PRIM'].includes(cd.id) ? 100 : 88;
-    const width = soft ? 9 : 12;
-    return [base - width, base + width];
-  }
-
-  tempPenalty(car: SimCar): number {
-    const [lo, hi] = this.tempWindow(car);
-    if (car.tireTemp < lo) return (lo - car.tireTemp) * 0.035;
-    if (car.tireTemp > hi) return (car.tireTemp - hi) * 0.028;
-    return 0;
-  }
-
-  /** Износ за круг (в долях от номинала 1.0). Режим гонки, топливо, перегрев и уход за резиной реально меняют износ.
+  /** Износ за круг (в долях от номинала 1.0). Режим гонки, топливо и уход за резиной реально меняют износ.
    *  Откалибровано так, что в сбалансированном режиме резина изнашивается на 100% примерно за свой ресурс (life кругов). */
   wearPerLap(car: SimCar): number {
     const modeF = car.mode === 'aggr' ? 1.55 : car.mode === 'cons' ? 0.6 : 1;
     const fuelF = car.fuelMode === 'push' ? 1.25 : car.fuelMode === 'eco' ? 0.8 : 1;
-    const [, hi] = this.tempWindow(car);
-    const overheat = car.tireTemp > hi ? 1 + (car.tireTemp - hi) * 0.03 : 1;
     const degF = 0.55 + this.circuit.deg * 0.65; // абразивность трассы (0.7 → 1.0)
-    return degF * this.degMod * modeF * fuelF * overheat
+    return degF * this.degMod * modeF * fuelF
       * tireCareFactor(this.gs, car.tid) * setupWearMult(car.setup);
   }
 
-  /** Динамическая просадка темпа по мере износа: плавная + «обрыв» после 75% ресурса */
+  /** Прокол с растущей вероятностью: 80% износа — 1%, дальше +~5 п.п. за процент, на 100% — гарантирован */
+  punctureChance(wearPct: number): number {
+    if (wearPct < 80) return 0;
+    return Math.min(100, 1 + (wearPct - 80) * 4.95);
+  }
+
+  /** Динамическая просадка темпа по мере износа: заметная уже с 40%, резкий «обрыв» после 60% */
   tirePenalty(car: SimCar): number {
     const cd = compoundDef(this.gs.playerSeries, car.tire);
     const frac = car.wear / cd.life; // 0..1+
-    let p = cd.offset + frac * 2.7;                 // до ~2.7 с на полном ресурсе
-    p += Math.max(0, frac - 0.75) * 4.5;            // клифф: резина «поплыла»
-    return p + this.tempPenalty(car);
+    let p = cd.offset + frac * 3.8;                 // до ~3.8 с на полном ресурсе
+    p += Math.max(0, frac - 0.5) * 6;               // клифф: после 50% резина «плывёт» всё быстрее
+    return p;
   }
 
   lapEstimate(car: SimCar, first = false): number {
@@ -1613,7 +1667,7 @@ export class RaceSim {
     car.tire = nextTire;
     car.tireAge = 0;
     car.wear = 0;
-    car.tireTemp = 62;
+    car.pitCount++;
   }
 
   cross(car: SimCar) {
@@ -1625,10 +1679,12 @@ export class RaceSim {
     // круг, в который вошёл простой пит-стопа, не идёт в зачёт лучшего
     if (this.phase === 'green' && !car.pitLap && (car.bestLap == null || lapTime < car.bestLap)) car.bestLap = lapTime;
     car.pitLap = false;
-    const wf = this.wearFrac(car);
-    // риск прокола растёт после 100% износа: перекатавшая резина может не доехать
-    if (!['AW', 'I', 'W'].includes(car.tire) && wf > 1.05 && rnd() < Math.min(0.4, (wf - 1.05) * 0.9)) {
-      return this.retire(car, 'Прокол — резина не выдержала');
+    // прокол: 80% износа — 1%, дальше ~+5 п.п. за процент, на 100% — гарантирован
+    const wearPct = this.wearFrac(car) * 100;
+    const pP = this.punctureChance(wearPct);
+    if (pP > 0 && rnd() * 100 < pP) {
+      this.event(car.lap, `💥 ${car.code}: прокол на износе ${Math.round(wearPct)}%!`, 'crash');
+      return this.retire(car, `Прокол (износ ${Math.round(wearPct)}%)`);
     }
     if (car.lap >= this.totalLaps) {
       car.status = 'fin';
@@ -1653,8 +1709,7 @@ export class RaceSim {
     this.rollIncidents(car);
     this.aiDecide(car);
     if (car.pitLaps.includes(car.lap)) this.beginPit(car);
-    this.updateTireTemp(car);
-    car.fuel = Math.max(0, car.fuel - (car.fuelMode === 'eco' ? 1.15 : car.fuelMode === 'push' ? 1.55 : 1.35));
+    car.fuel = Math.max(0, car.fuel - (car.fuelMode === 'eco' ? 1.05 : car.fuelMode === 'push' ? 1.42 : 1.25));
     if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
     if (car.letThrough) {
       car.letThroughLaps--;
@@ -1665,24 +1720,14 @@ export class RaceSim {
     car.targetLap = this.lapEstimate(car);
   }
 
-  updateTireTemp(car: SimCar) {
-    const [lo, hi] = this.tempWindow(car);
-    const mid = (lo + hi) / 2;
-    let target = mid;
-    if (car.mode === 'aggr' || car.fuelMode === 'push') target = hi + 3;
-    if (car.mode === 'cons' || car.fuelMode === 'eco') target = mid - 4;
-    if (this.phase === 'sc' || this.phase === 'vsc') target = lo - 8;
-    car.tireTemp += (target - car.tireTemp) * 0.12;
-  }
-
-  /** Живые решения ИИ: пит под SC, экстренный пит, экономия */
+  /** Живые решения ИИ: пит под SC, пит до зоны проколов, экономия топлива */
   aiDecide(car: SimCar) {
     if (car.isPlayer || car.status !== 'run' || car.pitting) return;
     if (this.kind !== 'race') return;
     // топливный менеджмент: если не хватает до финиша — переход в ЭКО
     const lapsLeft = this.totalLaps - car.lap;
-    const burn = car.fuelMode === 'push' ? 1.55 : car.fuelMode === 'eco' ? 1.15 : 1.35;
-    if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 3) {
+    const burn = car.fuelMode === 'push' ? 1.42 : car.fuelMode === 'eco' ? 1.05 : 1.25;
+    if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 2) {
       car.fuelMode = 'eco';
       if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} переходит в режим экономии топлива`, 'info');
     }
@@ -1697,22 +1742,21 @@ export class RaceSim {
       this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
       return;
     }
-    // ИИ не доводит резину до 100%: прогноз — дотянет ли текущий комплект до планового пита/финиша
+    // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финиша
     const wpl = this.wearPerLap(car);
     const targetLap = nextPlanned ?? this.totalLaps;
     const projected = wear + (targetLap - car.lap) * wpl;
-    if (projected > 0.98 && !soon && car.lap < this.totalLaps - 2) {
-      // планируем заезд заранее, чтобы не перекатать резину
+    if (projected > 0.75 && !soon && car.lap < this.totalLaps - 2) {
       car.pitLaps.push(car.lap + 1);
-      this.event(car.lap, projected > 1.15
-        ? `${car.code}: резина на пределе — вынужденный заезд`
+      this.event(car.lap, wear > 0.62
+        ? `${car.code}: износ ${Math.round(wear * 100)}% — заезд до зоны проколов`
         : `${car.code}: бережёт резину — ранний пит-стоп`, 'pit');
       return;
     }
-    // аварийный пит, если всё же перекатал
-    if (wear > 1.1 && !soon && car.lap < this.totalLaps - 2) {
+    // аварийный пит, если уже в зоне проколов
+    if (wear > 0.8 && !soon && car.lap < this.totalLaps - 2) {
       car.pitLaps.push(car.lap + 1);
-      this.event(car.lap, `${car.code}: резина кончилась — вынужденный заезд`, 'pit');
+      this.event(car.lap, `${car.code}: резина на пределе — вынужденный заезд`, 'pit');
     }
   }
 
@@ -1962,6 +2006,7 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     };
     ss.current++;
     tickUpgrades(gs);
+    aiDevelopment(gs); // ИИ-команды развивают болиды между этапами
     gs.phase = 'hub';
     gs.weekend = null;
     const leader = Object.entries(ss.dStand).sort((a, b) => b[1] - a[1])[0];
