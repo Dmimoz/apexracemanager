@@ -156,7 +156,7 @@ function supplierPowerSafe(t: import('../game/types').Team): number {
 
 /* ================= ХАБ ================= */
 
-type HubTab = 'calendar' | 'standings' | 'garage' | 'power' | 'market' | 'sponsors' | 'editor' | 'saves' | 'news';
+type HubTab = 'calendar' | 'standings' | 'garage' | 'power' | 'market' | 'editor' | 'saves' | 'news';
 
 export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
   onStartWeekend: () => void; onResumeWeekend: () => void; onEndSeason: () => void;
@@ -187,7 +187,6 @@ export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
     ['garage', 'garage', 'Боксы'],
     ['power', 'bolt', 'Рейтинги'],
     ['market', 'swap', 'Трансферы'],
-    ['sponsors', 'doc', 'Спонсоры'],
     ['editor', 'edit', 'Редактор'],
     ['news', 'radio', 'Новости'],
     ['saves', 'save', 'Сэйвы'],
@@ -255,7 +254,6 @@ export function HubScreen({ onStartWeekend, onResumeWeekend, onEndSeason }: {
         {tab === 'garage' && <GarageTab />}
         {tab === 'power' && <PowerTab />}
         {tab === 'market' && <MarketTab />}
-        {tab === 'sponsors' && <SponsorsTab />}
         {tab === 'editor' && <EditorTab />}
         {tab === 'news' && <NewsTab />}
         {tab === 'saves' && <SavesTab />}
@@ -419,53 +417,20 @@ function GarageTab() {
         )}
       </Panel>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        <Panel title="Элементы силовой установки (Ф1)" delay={40}>
-          {isF1 ? myDrivers.map((d) => (
-            <div key={d.id} className="mb-4 border border-[#2a3442] p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <FlagTag nat={d.nat} /><span className="font-bold text-[13px]">{d.name}</span>
-              </div>
-              <div className="grid grid-cols-4 gap-1.5">
-                {PU_ELEMENTS.map((el) => <PUChip key={el} did={d.id} el={el} />)}
-              </div>
+      <Panel title="Элементы силовой установки (Ф1)" delay={40}>
+        {isF1 ? myDrivers.map((d) => (
+          <div key={d.id} className="mb-4 border border-[#2a3442] p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <FlagTag nat={d.nat} /><span className="font-bold text-[13px]">{d.name}</span>
             </div>
-          )) : <div className="text-[13px] text-[#7f8da0]">Правило лимита СУ действует только в Формуле 1.</div>}
-        </Panel>
-
-        <Panel title="Настройки болидов (по пилотам)" delay={80}>
-          <div className="text-[12px] text-[#7f8da0] mb-3">Настраиваются в практиках во время уик-энда. Здесь — текущие значения.</div>
-          {myDrivers.map((d) => (
-            <div key={d.id} className="mb-3 border border-[#2a3442] p-3">
-              <div className="flex items-center gap-2 mb-2"><FlagTag nat={d.nat} /><span className="font-bold text-[13px]">{d.name}</span></div>
-              <div className="grid grid-cols-2 gap-x-6">
-                {(['aero', 'mech', 'tires', 'brake', 'diff'] as const).map((f) => (
-                  <SetupSlider key={f} did={d.id} field={f} />
-                ))}
-              </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {PU_ELEMENTS.map((el) => <PUChip key={el} did={d.id} el={el} />)}
             </div>
-          ))}
-        </Panel>
-      </div>
-
-      <Panel title="Стратегия пилотов на гонку" delay={120}>
-        <div className="text-[12px] text-[#7f8da0] mb-3">Режим влияет на темп и износ шин. Менять можно и прямо во время гонки с пит-уолла.</div>
-        <div className="grid sm:grid-cols-2 gap-3">
-          {myDrivers.map((d) => (
-            <div key={d.id} className="border border-[#2a3442] p-3">
-              <div className="flex items-center gap-2 mb-2"><FlagTag nat={d.nat} /><span className="font-bold text-[13px]">{d.name}</span></div>
-              <div className="flex gap-2">
-                {([['aggr', 'Атака'], ['balanced', 'Баланс'], ['cons', 'Беречь шины']] as const).map(([m, label]) => (
-                  <button key={m} onClick={() => dispatch({ type: 'SET_STRATEGY', did: d.id, preset: m })}
-                    className={`flex-1 py-1.5 text-[12px] font-semibold border transition-colors ${gs.strategy[d.id] === m ? 'bg-[#d8f224] text-[#10131a] border-[#d8f224]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#4a5a70]'}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+          </div>
+        )) : <div className="text-[13px] text-[#7f8da0]">Правило лимита СУ действует только в Формуле 1.</div>}
       </Panel>
+
+      <SponsorsPanel />
 
       <Panel title="Персонал команды" delay={160}>
         <div className="grid sm:grid-cols-2 gap-2">
@@ -905,7 +870,7 @@ function StaffRow({ s }: { s: Staff }) {
 }
 
 /* ---- Спонсоры ---- */
-function SponsorsTab() {
+function SponsorsPanel() {
   const { gs } = useGame();
   const meta = SERIES_META[gs.playerSeries];
   const totalRounds = gs.series[gs.playerSeries].rounds.length;
@@ -915,7 +880,6 @@ function SponsorsTab() {
   const lost = gs.sponsors.filter((s) => !s.active);
   const totalActive = active.reduce((s, x) => s + x.value, 0);
   return (
-    <div className="space-y-4">
       <Panel title="Спонсорские контракты" accent right={
         <span className="font-disp text-[11px] text-[#d8f224] num">{money(totalActive)}/сезон</span>
       }>
@@ -960,7 +924,6 @@ function SponsorsTab() {
           </div>
         )}
       </Panel>
-    </div>
   );
 }
 
