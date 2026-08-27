@@ -35,6 +35,49 @@ function drawCarTop(ctx: CanvasRenderingContext2D, L: number, color: string, dim
   ctx.fillRect(-L * 0.74, L * 0.38, L * 0.32, L * 0.2);
 }
 
+/** Машина безопасности: серебристое купе с мигающей янтарно-зелёной балкой */
+function drawSafetyCar(ctx: CanvasRenderingContext2D, L: number, now: number) {
+  const flash = Math.floor(now / 180) % 2 === 0; // чередуем янтарный/зелёный
+  // колёса
+  ctx.fillStyle = '#14171d';
+  ctx.fillRect(L * 0.42, -L * 0.52, L * 0.26, L * 0.2);
+  ctx.fillRect(L * 0.42, L * 0.32, L * 0.26, L * 0.2);
+  ctx.fillRect(-L * 0.62, -L * 0.52, L * 0.26, L * 0.2);
+  ctx.fillRect(-L * 0.62, L * 0.32, L * 0.26, L * 0.2);
+  // кузов купе (обтекаемый, без крыльев)
+  ctx.fillStyle = '#d6dae0';
+  ctx.beginPath();
+  ctx.moveTo(L * 0.85, 0);
+  ctx.quadraticCurveTo(L * 0.6, L * 0.3, L * 0.1, L * 0.32);
+  ctx.lineTo(-L * 0.6, L * 0.28);
+  ctx.quadraticCurveTo(-L * 0.85, L * 0.15, -L * 0.85, 0);
+  ctx.quadraticCurveTo(-L * 0.85, -L * 0.15, -L * 0.6, -L * 0.28);
+  ctx.lineTo(L * 0.1, -L * 0.32);
+  ctx.quadraticCurveTo(L * 0.6, -L * 0.3, L * 0.85, 0);
+  ctx.closePath();
+  ctx.fill();
+  // тёмная полоса по центру и остекление
+  ctx.fillStyle = '#2a2f38';
+  ctx.beginPath();
+  ctx.ellipse(L * 0.05, 0, L * 0.3, L * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // световая балка на крыше: два мигающих огня (янтарный + зелёный)
+  const amber = flash ? '#ffb020' : '#5a4a20';
+  const green = flash ? '#27d95c' : '#1d4a2c';
+  ctx.fillStyle = '#10131a';
+  ctx.fillRect(-L * 0.14, -L * 0.1, L * 0.28, L * 0.2);
+  ctx.fillStyle = amber;
+  ctx.fillRect(-L * 0.12, -L * 0.07, L * 0.1, L * 0.14);
+  ctx.fillStyle = green;
+  ctx.fillRect(L * 0.02, -L * 0.07, L * 0.1, L * 0.14);
+  // свечение мигалок
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = flash ? '#ffb020' : '#27d95c';
+  ctx.fillStyle = flash ? 'rgba(255,176,32,0.9)' : 'rgba(39,217,92,0.9)';
+  ctx.fillRect(flash ? -L * 0.12 : L * 0.02, -L * 0.06, L * 0.1, L * 0.12);
+  ctx.shadowBlur = 0;
+}
+
 function posAt(track: TrackGeo, dist: number): { x: number; y: number; a: number } {
   const total = track.total;
   const d = ((dist % total) + total) % total;
@@ -201,6 +244,22 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
             ctx.fillStyle = '#ffc94d';
             ctx.fillText('PIT', X + 12 * sc, Y + 16 * sc);
           }
+        }
+        // физическая машина безопасности (только в гонке)
+        if ('sc' in s && s.sc) {
+          const scCar = s.sc;
+          const { x, y, a } = posAt(track, scCar.dist);
+          const X = tf(x), Y = tfy(y);
+          ctx.save();
+          ctx.translate(X, Y);
+          ctx.rotate(a);
+          ctx.shadowColor = '#ffb020';
+          ctx.shadowBlur = 14 + pulse * 8;
+          drawSafetyCar(ctx, 18 * sc, now);
+          ctx.restore();
+          ctx.font = `700 ${Math.max(9, 11 * sc)}px Orbitron, sans-serif`;
+          ctx.fillStyle = '#ffc94d';
+          ctx.fillText('SC', X + 13 * sc, Y - 12 * sc);
         }
       }
       raf = requestAnimationFrame(draw);

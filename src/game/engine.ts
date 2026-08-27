@@ -1802,6 +1802,17 @@ export class RaceSim {
     this.t += dt;
     const lead = this.leader();
 
+    // Машина безопасности после рестарта разгоняется и уезжает на пит-лейн
+    if (this.sc && this.sc.leaving) {
+      const sIdx = this.pointIndex(this.sc.dist);
+      const sF = this.track.factor[sIdx] / this.track.avgFactor;
+      this.sc.dist += (this.track.total / lead.targetLap) * sF * 1.15 * dt;
+      if (this.sc.dist >= this.sc.exitTarget) {
+        this.sc = null;
+        this.event(lead.lap, 'Машина безопасности в боксах — свободная гонка', 'sc');
+      }
+    }
+
     if (this.phase === 'sc' || this.phase === 'vsc') {
       // Машина безопасности: темп на 30% ниже боевого, пелотон сбивается максимально плотно.
       // Машины в боксах НЕ участвуют в построении — они стоят и не сбивают позиции остальных.
@@ -1816,7 +1827,14 @@ export class RaceSim {
           if (car.pitCrawl <= 0) this.leavePit(car);
         }
       }
-      // 2) пелотон на трассе: строится плотно за лидером (только машины НЕ в боксах)
+      // 2) физическая машина безопасности едет во главе и задаёт темп
+      const scLead = this.sc && this.sc.active && !this.sc.leaving;
+      if (scLead) {
+        const sIdx = this.pointIndex(this.sc!.dist);
+        const sF = this.track.factor[sIdx] / this.track.avgFactor;
+        this.sc!.dist += crawlCap * sF * 0.72 * dt;
+      }
+      // 3) пелотон на трассе: строится плотно за машиной безопасности / лидером
       const onTrack = this.runningSorted().filter((c) => c.pitCrawl <= 0 && !c.pitting);
       let prevDist = -1e9;
       for (let rank = 0; rank < onTrack.length; rank++) {
@@ -1824,7 +1842,8 @@ export class RaceSim {
         if (!car.isPlayer && car.fuelMode !== 'eco') car.fuelMode = 'eco'; // под SC берегут топливо
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
-        const target = rank === 0 ? Infinity : prevDist - gap;
+        // лидер следует за машиной безопасности; остальные — за впереди идущим
+        const target = (rank === 0 && scLead) ? this.sc!.dist - 20 : (rank === 0 ? Infinity : prevDist - gap);
         let speed = (this.track.total / car.targetLap) * f * 0.7; // −30% к темпу
         if (car.dist < target) {
           const need = target - car.dist;
@@ -1854,7 +1873,13 @@ export class RaceSim {
     }
     if (this.phase === 'sc' || this.phase === 'vsc') {
       if (lead.lap >= this.phaseEndLap) {
-        this.event(lead.lap, this.phase === 'sc' ? 'Машина безопасности заезжает — рестарт!' : 'Конец VSC — гонка возобновлена', 'flag');
+        if (this.phase === 'sc' && this.sc) {
+          this.sc.leaving = true;                       // машина безопасности уходит на пит-лейн
+          this.sc.exitTarget = lead.dist + 140;
+          this.event(lead.lap, '🏁 Рестарт! Машина безопасности свернула на пит-лейн', 'flag');
+        } else {
+          this.event(lead.lap, 'Конец VSC — гонка возобновлена', 'flag');
+        }
         this.phase = 'green';
         for (const car of this.cars) if (car.status === 'run') car.targetLap = this.lapEstimate(car);
       }
@@ -2171,6 +2196,15 @@ export class RaceSim {
     }
   }
 
+  /** Выезд физической машины безопасности: она встаёт перед лидером и ведёт пелотон. */
+  deploySafetyCar(lap: number) {
+    this.phase = 'sc';
+    this.phaseEndLap = lap + 3 + Math.floor(rnd() * 2); // минимум 3 круга
+    const lead = this.leader();
+    this.sc = { active: true, leaving: false, dist: lead.dist + 26, exitTarget: 0 };
+    this.event(lap, '🚔 Машина безопасности на трассе — пелотон за ней (минимум 3 круга)', 'sc');
+  }
+
   retire(car: SimCar, reason: string) {
     if (car.status !== 'run') return;
     car.status = 'out';
@@ -2199,6 +2233,7 @@ export class RaceSim {
   raiseRedFlag(lap: number) {
     this.phase = 'red';
     this.redRemaining = 40; // секунд реального времени
+    this.sc = null;         // машина безопасности тоже уходит в боксы
     for (const car of this.cars) {
       if (car.status === 'run') {
         car.redParked = true;
