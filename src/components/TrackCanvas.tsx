@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { RaceSim, SimCar } from '../game/engine';
+import type { RaceSim, SessionSim } from '../game/engine';
 import type { TrackGeo } from '../game/types';
 
 function posAt(track: TrackGeo, dist: number): { x: number; y: number; a: number } {
@@ -20,7 +20,7 @@ function posAt(track: TrackGeo, dist: number): { x: number; y: number; a: number
 }
 
 export default function TrackCanvas({ sim, track, seriesColor, phase, raining }: {
-  sim: RaceSim | null;
+  sim: RaceSim | SessionSim | null;
   track: TrackGeo;
   seriesColor: string;
   phase?: string;
@@ -134,6 +134,8 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
         const cars = [...s.cars].sort((a, b) => (a.status === 'run' ? 1 : 0) - (b.status === 'run' ? 1 : 0) || a.pos - b.pos);
         for (const car of cars) {
           if (car.status === 'out') continue;
+          // сессионные машины: рисуем только те, что на трассе (остальные в боксах)
+          if ('state' in car && car.state !== 'flying') continue;
           const { x, y, a } = posAt(track, car.dist);
           const X = tf(x), Y = tfy(y);
           const leader = car.pos === 1 && car.status === 'run';
@@ -200,8 +202,4 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
       )}
     </div>
   );
-}
-
-export function carProgress(car: SimCar, totalLaps: number): number {
-  return Math.min(100, (car.lap / totalLaps) * 100);
 }

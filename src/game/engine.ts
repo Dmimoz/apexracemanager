@@ -752,6 +752,9 @@ export function skipSession(gs: GameState): SessionResult | null {
 
 /* ================= СИМУЛЯЦИЯ СЕССИЙ (практика / квалификация) ================= */
 
+/** Программа работы в практике (как в F1 Manager): темп, длина серии, шины */
+export type SessionProgram = 'quali' | 'race' | 'tires';
+
 export interface SessionCar {
   did: string; tid: string; code: string; name: string; color: string; color2: string;
   isPlayer: boolean; nat: string;
@@ -769,6 +772,9 @@ export interface SessionCar {
   // управление игроком
   manual: boolean; playerOut: boolean; boxNext: boolean; advice: string | null;
   setup: Setup;
+  program: SessionProgram | null;  // выбранная программа работы
+  stayBoxed: boolean;              // стоит в боксах, пока игрок не выпустит
+  tireFlip: boolean;               // для теста шин: чередуем составы
 }
 
 interface Segment { name: string; simClock: number; realMin: number; cutoff: number }
@@ -832,7 +838,7 @@ export class SessionSim {
         dist: 0, targetLap: 0, lapStartT: 0, lapStartDist: 0,
         lastLap: null, bestLap: null, segBest: {},
         state: 'garage', phase2: 'out', pushed: 0,
-        runLen: this.planRunLen(),
+        runLen: 4,
         exitAt: (0.03 + rnd() * 0.2) * this.segments[0].simClock + i * 3,
         tire: this.pickTire(), tireAge: 0,
         perf: carPerf(gs, t, circuit),
@@ -842,8 +848,12 @@ export class SessionSim {
         eliminatedIn: null,
         manual: isPlayer, playerOut: false, boxNext: false, advice: null,
         setup,
+        program: isPlayer && kind === 'practice' ? 'race' : null,
+        stayBoxed: false, tireFlip: false,
       });
-      if (this.wetSession) this.cars[this.cars.length - 1].tire = sid === 'fe' ? 'AW' : 'I';
+      const car = this.cars[this.cars.length - 1];
+      car.runLen = this.planRunLen(car);
+      if (this.wetSession) car.tire = sid === 'fe' ? 'AW' : 'I';
     });
     this.event(0, kind === 'practice' ? 'Зелёный свет — практика началась' : `Зелёный свет — ${this.segment}`);
   }
@@ -857,9 +867,13 @@ export class SessionSim {
     return sid === 'f1' ? 'S' : sid === 'indy' ? 'ALT' : sid === 'f3' ? 'M' : sid === 'fe' ? 'AW' : 'O';
   }
 
-  planRunLen(): number {
-    if (this.kind === 'practice') return 3 + Math.floor(rnd() * 4); // 3–6 кругов
-    return 2 + Math.floor(rnd() * 2); // 2–3 круга
+  planRunLen(car?: SessionCar): number {
+    if (this.kind !== 'practice') return 2 + Math.floor(rnd() * 2); // квалификация: 2–3 круга
+    const prog = car?.program ?? null;
+    if (prog === 'quali') return 2 + Math.floor(rnd() * 2);   // короткие атакующие серии
+    if (prog === 'race') return 7 + Math.floor(rnd() * 4);    // длинные гоночные отрезки
+    if (prog === 'tires') return 4 + Math.floor(rnd() * 2);   // средние серии для теста шин
+    return 3 + Math.floor(rnd() * 4);
   }
 
   event(lap: number, text: string) {
@@ -887,7 +901,8 @@ export class SessionSim {
       if (car.state === 'elim' || car.state === 'done') { car.status = 'park'; continue; }
       if (car.state === 'garage') {
         car.status = 'park';
-        const mayExit = car.manual ? car.playerOut : this.t >= car.exitAt;
+        // игрок управляет выездом только если сам оставил машину в боксах (stayBoxed)
+        const mayExit = (car.manual && car.stayBoxed) ? car.playerOut : this.t >= car.exitAt;
         if (mayExit && this.clock > seg0 * 0.05) {
           car.state = 'flying';
           car.phase2 = 'out';
@@ -938,25 +953,20 @@ export class SessionSim {
       lapTime += 5 + rnd() * 2;
       car.state = 'garage';
       car.status = 'park';
+      const calledIn = car.boxNext && car.manual;   // игрок сам позвал в боксы
       const dwell = this.kind === 'practice' ? 30 + rnd() * 50 : 20 + rnd() * 40;
-      car.exitAt = this.t + (car.manual ? 0 : dwell);
+      car.exitAt = this.t + dwell;
       car.phase2 = 'out';
       car.pushed = 0;
       car.boxNext = false;
-      car.runLen = this.planRunLen();
+      car.stayBoxed = calledIn;                      // стоит, пока игрок не выпустит
+      car.playerOut = false;
+      car.runLen = this.planRunLen(car);
       if (car.manual && this.kind === 'practice') {
         car.advice = this.makeAdvice(car);
         this.event(0, car.advice);
       }
-      if (this.kind === 'practice' && !car.manual && rnd() < 0.35) {
-        const sid = this.gs.playerSeries;
-        const fresh = sid === 'f1' ? pick(['S', 'M', 'H']) : sid === 'indy' ? pick(['ALT', 'PRIM']) : car.tire;
-        if (fresh !== car.tire) {
-          this.event(0, `${car.code} сменил шины: ${tireName(sid, car.tire)} → ${tireName(sid, fresh)}`);
-          car.tire = fresh;
-          car.tireAge = 0;
-        }
-      }
+      if (this.kind === 'practice') this.serviceTires(car);
       return;
     }
     car.lastLap = lapTime;
@@ -977,6 +987,32 @@ export class SessionSim {
     const label = field === 'aero' ? 'прижим' : field === 'mech' ? 'мех. зацеп' : 'давление шин';
     const extra = car.tireAge > compoundDef(this.gs.playerSeries, car.tire).life * 0.6 ? '. Резина устаёт — нужен свежий комплект' : '';
     return `📻 ${car.code}: нужно ${dir} ${label} на ~${Math.round(Math.abs(delta))}${extra}`;
+  }
+
+  /** Обслуживание шин в боксах по выбранной программе */
+  serviceTires(car: SessionCar) {
+    const sid = this.gs.playerSeries;
+    if (sid === 'fe') return; // всесезонные шины — без замен
+    if (this.raining) { car.tire = 'I'; car.tireAge = 0; return; }
+    const dry = dryCompounds(sid);
+    const soft = dry[0]?.id ?? car.tire;
+    const med = dry.length > 1 ? dry[1].id : soft;
+    const wear = car.tireAge / Math.max(1, compoundDef(sid, car.tire).life);
+    let next: string | null = null;
+    if (car.manual) {
+      if (car.program === 'quali') next = soft;
+      else if (car.program === 'race') next = wear > 0.55 ? med : null;
+      else if (car.program === 'tires') { car.tireFlip = !car.tireFlip; next = car.tireFlip ? med : soft; }
+    } else if (rnd() < 0.35) {
+      next = dry[Math.floor(rnd() * dry.length)].id;
+    }
+    if (next && next !== car.tire) {
+      this.event(0, `${car.code} сменил шины: ${tireName(sid, car.tire)} → ${tireName(sid, next)}`);
+      car.tire = next;
+      car.tireAge = 0;
+    } else if (car.tireAge > 0 && wear > 0.5) {
+      car.tireAge = 0; // свежий комплект того же состава
+    }
   }
 
   recordLap(car: SessionCar, lapTime: number) {
@@ -1038,11 +1074,21 @@ export class SessionSim {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   }
 
+  /** Быстро досимулировать сессию до конца (для кнопки «Завершить сессию») */
+  fastForward() {
+    let guard = 0;
+    while (!this.done && guard < 20000) {
+      this.tick(1.5);
+      guard++;
+    }
+  }
+
   /* ---- управление игроком ---- */
 
   sendOut(did: string) {
     const car = this.cars.find((c) => c.did === did);
     if (!car || !car.manual || car.state !== 'garage') return;
+    car.stayBoxed = false;
     car.playerOut = true;
   }
 
@@ -1055,7 +1101,19 @@ export class SessionSim {
 
   setRunLen(did: string, n: number) {
     const car = this.cars.find((c) => c.did === did);
-    if (car && car.manual) car.runLen = clamp(n, 2, 8);
+    if (car && car.manual) car.runLen = clamp(n, 1, 12);
+  }
+
+  /** Выбор программы работы (как в F1 Manager). Действует со следующего выезда */
+  setProgram(did: string, prog: SessionProgram) {
+    const car = this.cars.find((c) => c.did === did);
+    if (!car || !car.manual || this.kind !== 'practice') return;
+    car.program = prog;
+    car.runLen = this.planRunLen(car);
+    car.stayBoxed = false;
+    car.playerOut = false;
+    const names: Record<SessionProgram, string> = { quali: 'квалификационный темп', race: 'гоночная симуляция', tires: 'тест шин' };
+    this.event(0, `${car.code}: программа — ${names[prog]}`);
   }
 
   setSessionTire(did: string, tireId: string) {
