@@ -1410,6 +1410,24 @@ export class RaceSim {
     return Math.max(lap, baseLap(c, this.gs.playerSeries) * 0.8);
   }
 
+  /** Реальная потеря времени на пит-стопе: машина ползёт по пит-лейну и теряет позиции */
+  completePit(car: SimCar) {
+    const loss = this.pitLoss(car);
+    car.pitCrawl = loss;
+    car.pitLap = true;
+    const stintIdx = car.pitLaps.indexOf(car.lap - 1);
+    const planTire = this.raining ? (car.tire === 'AW' ? 'AW' : 'I') : car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] ?? car.tire;
+    const nextTire = car.pendingTire ?? planTire;
+    car.pendingTire = null;
+    const servedPen = car.penQueue.reduce((s, p) => s + p, 0);
+    if (servedPen > 0) { car.pitCrawl += servedPen; this.event(car.lap, `${car.code}: отбыт штраф ${servedPen} с на пит-стопе`, 'pit'); car.penQueue = []; }
+    this.event(car.lap, `${car.code} — пит-стоп: ${tireName(this.gs.playerSeries, car.tire)} → ${tireName(this.gs.playerSeries, nextTire)} (~${loss.toFixed(0)} с)`, 'pit');
+    car.tire = nextTire;
+    car.tireAge = 0;
+    car.tireTemp = 62;
+    car.pitting = false;
+  }
+
   /** Ф1: 18–25 с под зелёными; остальные серии 30–40 с; под SC/VSC — вдвое меньше */
   pitLoss(car: SimCar): number {
     const mech = this.gs.teams[car.tid].staffIds[2];
