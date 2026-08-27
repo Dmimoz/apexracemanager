@@ -48,7 +48,7 @@ export const SERIES_META: Record<SeriesId, SeriesMeta> = {
     sprintPoints: [], revSprintPoints: [10, 8, 6, 5, 4, 3, 2, 1],
     polePoints: 2, flPoints: 1, budgetFactor: 0.06, specCar: 'Dallara F3 / Mecachrome',
     compounds: [
-      { id: 'M', name: 'Medium', short: 'M', color: '#ffd23b', offset: 0, life: 30 },
+      { id: 'M', name: 'Medium', short: 'M', color: '#ffd23b', offset: 0, life: 32 },
       { id: 'I', name: 'Wet', short: 'W', color: '#4c7dff', offset: 3, life: 50 },
     ],
   },

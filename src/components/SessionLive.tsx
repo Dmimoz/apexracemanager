@@ -64,7 +64,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
     let last = performance.now();
     let acc = 0;
     const STEP = 1 / 240;
-    const BASE = 3.75; // базовая скорость ×1 — замедлена в 8 раз
+    const BASE = 6; // базовая скорость ×1 (таймер согласован с временем круга)
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
