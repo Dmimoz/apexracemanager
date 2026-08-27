@@ -59,6 +59,8 @@ function reducer(gs: GameState, a: Action): GameState {
     case 'APPLY_SESSION': {
       applySession(g, a.sim, a.stage);
       if (a.stage === 'race') simOtherSeries(g);
+      // страховка: пока уик-энд не закрыт игроком, остаёмся на его экране с результатами
+      if (g.weekend) g.phase = 'weekend';
       saveGame('auto', g);
       return g;
     }

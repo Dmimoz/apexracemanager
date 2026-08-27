@@ -19,6 +19,7 @@ void useDummy;
 /* ================= ТИТУЛЬНЫЙ ЭКРАН ================= */
 
 export function TitleScreen({ onLoad, onNew }: { onLoad: (g: import('../game/types').GameState) => void; onNew: () => void }) {
+  const [, bumpSaves] = useState(0);
   const saves = listSaves();
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden">
@@ -47,7 +48,8 @@ export function TitleScreen({ onLoad, onNew }: { onLoad: (g: import('../game/typ
                   </div>
                   <div className="flex gap-2">
                     <button className="font-disp text-[9px] font-bold px-2.5 py-1 bg-[#2f8f4e] hover:bg-[#3aa85f] text-white transition-colors" onClick={() => { const g = loadGame(s.slot); if (g) onLoad(g); }}>ЗАГРУЗИТЬ</button>
-                    <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#3a2a2a] text-[#ff6b4b] hover:bg-[#2a1515] transition-colors" onClick={() => deleteSave(s.slot)}>✕</button>
+                    <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#3a2a2a] text-[#ff6b4b] hover:bg-[#2a1515] transition-colors"
+                      onClick={() => { deleteSave(s.slot); bumpSaves((x) => x + 1); }}>✕</button>
                   </div>
                 </div>
               ))}
@@ -1043,6 +1045,7 @@ function NewsTab() {
 /* ---- Сэйвы ---- */
 function SavesTab() {
   const { gs, dispatch, say } = useGame();
+  const [, bump] = useState(0);
   const saves = listSaves();
   return (
     <Panel title="Сохранения" accent>
@@ -1059,10 +1062,10 @@ function SavesTab() {
                 </>
               ) : <div className="text-[12px] text-[#5a6a80] mb-2">Пусто</div>}
               <div className="flex gap-2">
-                <Btn className="!py-1.5" variant="acc" onClick={() => { dispatch({ type: 'SAVE', slot }); say(`Сохранено в ${slot.toUpperCase()}`); }}>
+                <Btn className="!py-1.5" variant="acc" onClick={() => { dispatch({ type: 'SAVE', slot }); bump((x) => x + 1); say(`Сохранено в ${slot.toUpperCase()}`); }}>
                   <Icon name="save" />Сохранить
                 </Btn>
-                {s && <Btn className="!py-1.5" onClick={() => { deleteSave(slot); say('Слот очищен'); }}>Очистить</Btn>}
+                {s && <Btn className="!py-1.5" onClick={() => { deleteSave(slot); bump((x) => x + 1); say('Слот очищен'); }}>Очистить</Btn>}
               </div>
             </div>
           );

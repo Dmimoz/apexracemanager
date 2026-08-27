@@ -1480,9 +1480,10 @@ export class RaceSim {
 
     // ---- СПРИНТЫ: один stint, комплект подбирается так, чтобы доехать без пит-стопа ----
     if (isSprint) {
-      // ищем самый мягкий состав, износа которого хватит на всю дистанцию с запасом (цель — 75%, не входя в зону проколов)
+      // ищем самый мягкий состав, износа которого хватит на всю дистанцию с запасом
+      // (×0.5 от ресурса: даже на абразивной трассе в пуш-режиме износ не войдёт в зону проколов)
       const dry = dryCompounds(sid).slice().sort((a, b) => a.offset - b.offset);
-      const sprintLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.75 / modeF);
+      const sprintLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.5 / modeF);
       let chosen = dry[dry.length - 1]?.id ?? 'M';
       for (const cd of dry) { if (sprintLife(cd.id) >= laps) { chosen = cd.id; break; } }
       return { startTire: chosen, stints: [chosen], pitLaps: [], mode };
@@ -1779,7 +1780,10 @@ export class RaceSim {
       this.raining = true;
       this.event(car.lap, '☔ НАЧАЛСЯ ДОЖДЬ! Все за промежуточными', 'info');
       for (const c2 of this.cars) if (c2.status === 'run' && !['I', 'W', 'AW'].includes(c2.tire)) {
-        if (!c2.pitLaps.includes(car.lap + 1)) c2.pitLaps.push(car.lap + 1);
+        // дождевой заезд заменяет все будущие плановые стопы (иначе был бы двойной пит)
+        c2.pitLaps = c2.pitLaps.filter((l) => l <= car.lap);
+        c2.pitLaps.push(car.lap + 1);
+        c2.pendingTire = this.gs.playerSeries === 'fe' ? 'AW' : 'I';
       }
     }
     this.rollIncidents(car);
@@ -1829,7 +1833,8 @@ export class RaceSim {
       return;
     }
     // под машиной безопасности пит «почти бесплатный» — ИИ переносит дальний стоп на этот круг
-    if ((this.phase === 'sc' || this.phase === 'vsc') && wear > 0.4 && car.lap < this.totalLaps - 4) {
+    // (только если резина уже заметно поработала, иначе это был бы лишний пит)
+    if ((this.phase === 'sc' || this.phase === 'vsc') && wear > 0.55 && car.lap < this.totalLaps - 4) {
       if (nextPlanned == null || nextPlanned - car.lap > 2) {
         car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
         car.pitLaps.push(car.lap + 1);
