@@ -1390,6 +1390,7 @@ export interface SimCar {
   dsq: boolean;                         // дисквалифицирован (нарушение правила двух составов)
   redParked: boolean;                   // стоит в боксах под красным флагом
   scPitUsed: boolean;                   // уже воспользовался бесплатным питом под SC (один раз)
+  wearBias: number;                     // индивидуальный износ резины (±12%) — разводит окна питов
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1439,7 +1440,8 @@ export class RaceSim {
       const perf = carPerf(gs, t, circuit);
       const skill = driverSkill(d, 'race', wetSession);
       const style = clamp((100 - d.consistency) / 100 * 0.6 + (d.racecraft / 100) * 0.4 + rnd() * 0.25, 0, 1);
-      const strat = this.buildStrategy(d, t, style, i, startOverrides?.[did]);
+      const wearBias = 0.88 + rnd() * 0.24; // у каждого пилота резина «идёт» по-своему (±12%)
+      const strat = this.buildStrategy(d, t, style, i, wearBias, startOverrides?.[did]);
       const car: SimCar = {
         did, tid: t.id, code: d.code, name: d.name, color: t.color, color2: t.color2,
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
@@ -1461,6 +1463,7 @@ export class RaceSim {
         dsq: false,
         redParked: false,
         scPitUsed: false,
+        wearBias,
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1477,11 +1480,11 @@ export class RaceSim {
    * Износ за круг — константа внутри отрезка (режимы фиксированы), поэтому прогноз точен. */
 
   /** Износ за круг для ПЛАНА (константа на отрезок: состав/трасса/режимы фиксированы). */
-  planWearRate(t: Team, mode: StrategyPreset, fuelMode: 'eco' | 'normal' | 'push', setup: Setup): number {
+  planWearRate(t: Team, mode: StrategyPreset, fuelMode: 'eco' | 'normal' | 'push', setup: Setup, bias = 1): number {
     const modeF = mode === 'aggr' ? 1.3 : mode === 'cons' ? 0.75 : 1;
     const fuelF = fuelMode === 'push' ? 1.2 : fuelMode === 'eco' ? 0.8 : 1;
     const degF = 0.55 + this.circuit.deg * 0.65;
-    return degF * this.degMod * modeF * fuelF * tireCareFactor(this.gs, t.id) * setupWearMult(setup);
+    return degF * this.degMod * modeF * fuelF * tireCareFactor(this.gs, t.id) * setupWearMult(setup) * bias;
   }
 
   /** Безопасная длина отрезка: кругов до 72% износа (запас до зоны прокола 80%). */
@@ -1539,7 +1542,7 @@ export class RaceSim {
   }
 
   /** Построить полную стратегию машины (режим + план отрезков). Вызывается ОДИН раз. */
-  buildStrategy(d: Driver, t: Team, style: number, gridPos: number, startOverride?: string) {
+  buildStrategy(d: Driver, t: Team, style: number, gridPos: number, wearBias: number, startOverride?: string) {
     const sid = this.gs.playerSeries;
     const laps = this.totalLaps;
     const isPlayer = t.id === this.gs.playerTeamId;
@@ -1551,7 +1554,7 @@ export class RaceSim {
       : style > 0.66 ? 'aggr' : style < 0.33 ? 'cons' : 'balanced';
     const fuelMode: 'eco' | 'normal' | 'push' = isPlayer ? 'normal' : aiFuelMode(mode, gridPos);
     const setup = isPlayer ? { ...driverSetup(this.gs, d.id) } : autoSetup(this.circuit);
-    const wearRate = this.planWearRate(t, mode, fuelMode, setup);
+    const wearRate = this.planWearRate(t, mode, fuelMode, setup, wearBias);
 
     // Дождь: один комплект дождевых до финища (питы — только по событию)
     if (this.wetSession) {
@@ -1663,7 +1666,7 @@ export class RaceSim {
    *  Совпадает с planWearRate, поэтому прогноз плана точен. Под SC/VSC резину берегут. */
   wearPerLap(car: SimCar): number {
     const neutralF = this.phase === 'sc' || this.phase === 'vsc' ? 0.3 : 1;
-    return this.planWearRate(this.gs.teams[car.tid], car.mode, car.fuelMode, car.setup) * neutralF;
+    return this.planWearRate(this.gs.teams[car.tid], car.mode, car.fuelMode, car.setup, car.wearBias) * neutralF;
   }
 
   /** Прокол с растущей вероятностью: 80% износа — 1%, дальше +~5 п.п. за процент, на 100% — гарантирован */
@@ -1907,7 +1910,7 @@ export class RaceSim {
       car.legIdx++;
       return;
     }
-    const wearRate = this.planWearRate(this.gs.teams[car.tid], car.mode, car.fuelMode, car.setup);
+    const wearRate = this.planWearRate(this.gs.teams[car.tid], car.mode, car.fuelMode, car.setup, car.wearBias);
     const dry = dryCompounds(this.gs.playerSeries);
     const tail = this.buildLegs(dry, car.tire, remaining, wearRate, Math.max(0, 3 - car.pitCount));
     for (const l of tail) { l.startLap += fromLap; l.endLap += fromLap; }
