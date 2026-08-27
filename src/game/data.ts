@@ -340,7 +340,7 @@ export const JUNIOR_FIRST = ['Марк', 'Энцо', 'Тео', 'Луи', 'Дан
 export const JUNIOR_LAST = ['Соланер', 'Фабр', 'Крамер', 'Верне', 'Кинт', 'Ветров', 'Бри', 'Собо', 'Руччи', 'Хальм', 'Моран', 'Дюбуа', 'Кляйн', 'Росси', 'Линд', 'Харт', 'Новак', 'Бьянки', 'Окада', 'Валье'];
 
 export function makeStaff(t: Team, rnd: () => number): Staff[] {
-  const nDrivers = DRIVERS.filter((d) => d.teamId === t.id).length || 2;
+  const nDrivers = DRIVERS.filter((d) => d.teamId === t.id && !d.reserve).length || 2;
   const roles = staffRolesFor(t.seriesId, nDrivers);
   const pre = F1_STAFF.filter((s) => s[3] === t.id);
   const out: Staff[] = [];

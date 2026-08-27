@@ -131,24 +131,43 @@ export function setupLapDelta(s: Setup, c: Circuit): number {
 
 export interface SetupTip { field: keyof Setup; label: string; current: number; suggested: number; confidence: number }
 
-/** Совет гоночного инженера перед практикой: по каждой настройке. Чем выше скилл инженера,
- *  тем ближе предложенные значения к идеальным (autoSetup) и тем выше уверенность. */
-export function engineerSetupAdvice(gs: GameState, circuit: Circuit): { engineer: string; skill: number; tips: SetupTip[] } {
+export interface DriverBriefing { did: string; driverName: string; carNo: number; engineer: string; skill: number; tips: SetupTip[] }
+
+/** Инженер, закреплённый за конкретным болидом: инженеры занимают слоты после фиксированных
+ *  ролей, и k-й пилот команды получает k-го инженера. */
+export function engineerForDriver(gs: GameState, teamId: string, did: string): Staff | null {
+  const t = gs.teams[teamId];
+  if (!t) return null;
+  const drivers = raceDriversOfTeam(gs, teamId);
+  const k = drivers.findIndex((d) => d.id === did);
+  if (k < 0) return null;
+  const roles = staffRolesFor(t.seriesId, drivers.length);
+  const fixedCount = roles.filter((r) => r !== 'engineer').length;
+  const engId = t.staffIds[fixedCount + k] ?? t.staffIds[fixedCount] ?? t.staffIds[0];
+  return engId ? gs.staff[engId] ?? null : null;
+}
+
+/** Инженерный брифинг перед практикой: каждый гоночный инженер даёт советы по настройкам
+ *  только для своего болида. Чем выше скилл инженера, тем ближе рекомендации к идеалу
+ *  (autoSetup) и тем выше уверенность. */
+export function engineerSetupAdvice(gs: GameState, circuit: Circuit): DriverBriefing[] {
   const t = playerTeam(gs);
-  const engId = t.staffIds[3] ?? t.staffIds[0];
-  const eng = gs.staff[engId];
-  const skill = eng?.skill ?? 60;
+  const drivers = raceDriversOfTeam(gs, t.id);
   const ideal = autoSetup(circuit);
-  const k = 0.35 + (skill / 100) * 0.6; // 0.35..0.95 — доля «видения» идеала
-  const firstDriver = driversOfTeam(gs, t.id)[0]?.id;
   const labels: Record<keyof Setup, string> = { aero: 'Прижим', mech: 'Мех. зацеп', tires: 'Давление шин', brake: 'Торм. баланс', diff: 'Дифференциал' };
-  const tips: SetupTip[] = (Object.keys(labels) as (keyof Setup)[]).map((f) => {
-    const cur = firstDriver ? driverSetup(gs, firstDriver)[f] : 50;
-    const err = (1 - k) * 18 * (rnd() * 2 - 1); // неточность тем выше, чем ниже скилл
-    const suggested = clamp(Math.round(ideal[f] + err), 15, 85);
-    return { field: f, label: labels[f], current: cur, suggested, confidence: Math.round(skill * 0.9 + rnd() * 10) };
+  return drivers.map((d, k) => {
+    const eng = engineerForDriver(gs, t.id, d.id);
+    const skill = eng?.skill ?? 60;
+    // скилл сильнее влияет на точность: 0.25..0.97
+    const kVis = 0.25 + (skill / 100) * 0.72;
+    const tips: SetupTip[] = (Object.keys(labels) as (keyof Setup)[]).map((f) => {
+      const cur = driverSetup(gs, d.id)[f];
+      const err = (1 - kVis) * 20 * (rnd() * 2 - 1);
+      const suggested = clamp(Math.round(ideal[f] + err), 15, 85);
+      return { field: f, label: labels[f], current: cur, suggested, confidence: clamp(Math.round(skill * 0.92 + rnd() * 8), 0, 100) };
+    });
+    return { did: d.id, driverName: d.name, carNo: k + 1, engineer: eng?.name ?? 'Инженер', skill, tips };
   });
-  return { engineer: eng?.name ?? 'Инженер', skill, tips };
 }
 
 export function setupWearMult(s: Setup): number {

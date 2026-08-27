@@ -25,7 +25,7 @@ export type Action =
   | { type: 'OFFER_FEE'; did: string }
   | { type: 'CANCEL_NEGO'; did: string }
   | { type: 'CANCEL_DEAL'; did: string }
-  | { type: 'STAFF_NEGO'; sid: string; slotRole: Parameters<typeof startStaffNego>[2] }
+  | { type: 'STAFF_NEGO'; sid: string; slotIdx: number }
   | { type: 'OFFER_STAFF'; sid: string }
   | { type: 'CANCEL_STAFF_NEGO'; sid: string }
   | { type: 'SWITCH_TEAM'; teamId: string }
@@ -94,7 +94,7 @@ function reducer(gs: GameState, a: Action): GameState {
       cancelDeal(g, a.did);
       return g;
     case 'STAFF_NEGO':
-      startStaffNego(g, a.sid, a.slotRole);
+      startStaffNego(g, a.sid, a.slotIdx);
       return g;
     case 'OFFER_STAFF':
       offerToStaff(g, a.sid);

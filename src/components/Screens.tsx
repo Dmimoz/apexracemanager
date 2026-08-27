@@ -472,17 +472,25 @@ function GarageTab() {
           {pt.staffIds.map((sid2, i) => {
             const s = gs.staff[sid2];
             if (!s) return null;
-            const role = staffRolesFor(pt.seriesId)[i];
+            const roles = staffRolesFor(pt.seriesId, raceDriversOfTeam(gs, pt.id).length);
+            const role = roles[i];
+            // каждый гоночный инженер закреплён за конкретным болидом (по порядку пилотов)
+            const fixedCount = roles.filter((r) => r !== 'engineer').length;
+            const engIdx = role === 'engineer' ? i - fixedCount : -1;
+            const driver = engIdx >= 0 ? raceDriversOfTeam(gs, pt.id)[engIdx] : null;
             return (
               <div key={sid2} className="border border-[#2a3442] px-3 py-2 flex items-center gap-3">
                 <span className="font-disp text-[9px] font-bold text-[#d8f224] w-14 uppercase">{ROLE_NAMES[role]?.slice(0, 12)}</span>
-                <span className="font-semibold text-[13px] flex-1 truncate">{s.name}</span>
+                <span className="font-semibold text-[13px] flex-1 truncate">
+                  {s.name}
+                  {driver && <span className="ml-1.5 text-[10px] font-normal text-[#7f8da0]">· болид #{engIdx + 1} ({driver.code})</span>}
+                </span>
                 <span className="num font-bold text-[13px]" style={{ color: s.skill >= 85 ? '#4ade80' : '#ffc94d' }}>{s.skill}</span>
               </div>
             );
           })}
         </div>
-        <div className="text-[11px] text-[#5a6a80] mt-2">Техдиректор усиливает апгрейды · механик ускоряет пит-стопы · инженеры дают советы по настройкам</div>
+        <div className="text-[11px] text-[#5a6a80] mt-2">Техдиректор усиливает апгрейды · механик ускоряет пит-стопы · каждый инженер отвечает за свой болид</div>
       </Panel>
     </div>
   );
@@ -728,13 +736,18 @@ function NegotiationBanners() {
             <span className="text-[#7f8da0] num">сбор {money(dl.fee)} · {money(dl.salary)}/год · {dl.years} г.</span>
           </div>
         ))}
-        {staffDeals.map((sd) => (
-          <div key={sd.sid} className="flex items-center gap-3 text-[13px]">
-            <Icon name="check" size={14} />
-            <span className="font-semibold">{gs.staff[sd.sid]?.name}</span>
-            <span className="text-[#7f8da0] num">{ROLE_NAMES[sd.slotRole]} · {money(sd.salary)}/год</span>
-          </div>
-        ))}
+        {staffDeals.map((sd) => {
+          const s = gs.staff[sd.sid];
+          const roles = staffRolesFor(gs.playerSeries, 2);
+          const slotName = roles[sd.slotIdx] ? ROLE_NAMES[roles[sd.slotIdx]] : ROLE_NAMES[s?.role ?? 'engineer'];
+          return (
+            <div key={sd.sid} className="flex items-center gap-3 text-[13px]">
+              <Icon name="check" size={14} />
+              <span className="font-semibold">{s?.name}</span>
+              <span className="text-[#7f8da0] num">{slotName} · {money(sd.salary)}/год</span>
+            </div>
+          );
+        })}
       </div>
     </Panel>
   );
@@ -867,7 +880,11 @@ function StaffRow({ s }: { s: Staff }) {
                   </button>
             ) : (
               <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#2a3442] hover:border-[#d8f224] hover:text-[#d8f224] transition-colors"
-                onClick={() => { dispatch({ type: 'STAFF_NEGO', sid: s.id, slotRole: s.role }); bump(); say('Переговоры начаты'); }}>ПЕРЕГОВОРЫ</button>
+                onClick={() => {
+                  const roles = staffRolesFor(gs.playerSeries, raceDriversOfTeam(gs, gs.playerTeamId).length);
+                  const idx = Math.max(0, roles.indexOf(s.role));
+                  dispatch({ type: 'STAFF_NEGO', sid: s.id, slotIdx: idx }); bump(); say('Переговоры начаты');
+                }}>ПЕРЕГОВОРЫ</button>
             )}
         </span>
       </div>

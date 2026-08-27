@@ -53,6 +53,7 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
   const [paused, setPaused] = useState(false);
   const pausedRef = useRef(false);
   pausedRef.current = paused;
+  const lastSegRef = useRef<string>('');
 
   const finish = () => {
     dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
@@ -65,13 +66,18 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
     let last = performance.now();
     let acc = 0;
     const STEP = 1 / 240;
-    const BASE = 24; // 1 реальная сек = 24 сим-сек: круг ~3.7 с, часовая практика ~2.5 мин
+    const BASE = 12; // 1 реальная сек = 12 сим-сек: сессии идут вдвое медленнее, игрок успевает управлять
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
       if (!pausedRef.current) {
         acc += dtReal * BASE * speedRef.current;
         while (acc > STEP) { simRef.current.tick(STEP); acc -= STEP; }
+        // авто-пауза при старте нового сегмента (Q2/Q3/SQ…), чтобы успеть выпустить машины
+        if (simRef.current.segment !== lastSegRef.current) {
+          if (lastSegRef.current !== '' && !simRef.current.done) setPaused(true);
+          lastSegRef.current = simRef.current.segment;
+        }
       }
       force((x) => (x + 1) % 1000000);
       if (simRef.current.done) { finish(); return; }

@@ -161,10 +161,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   </span>
                   <span className="num text-[10px] font-bold w-9 text-right" style={{ color: wearCol }} title={`Износ шин ${wear}%`}>{isOut ? '' : `${wear}%`}</span>
                   <span className="font-bold w-12">{car.code}</span>
-                  <span className="text-[#9fb0c4] truncate flex-1 text-[13px]">{car.name}</span>
+                  <span className="text-[#5a6a80] truncate flex-1 text-[12px]">{team.short}</span>
+                  {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm shrink-0" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
-                  {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
                     {isOut ? 'СХОД' : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
                   </span>
