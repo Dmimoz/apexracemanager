@@ -1720,8 +1720,8 @@ export class RaceSim {
         car.gap = car === lead ? 0 : Math.max(0, (lead.dist - car.dist) / leaderSpeed);
         const ahead = sorted[i - 1];
         car.interval = ahead && ahead.status === 'run' ? Math.max(0, (ahead.dist - car.dist) / leaderSpeed) : car.gap;
-        // DRS: только Ф2/Ф3, со 2-го круга, при отставании менее секунды
-        car.drs = drsSeries && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
+        // DRS: только Ф2/Ф3, со 2-го круга, при отставании менее секунды, только по сухому
+        car.drs = drsSeries && !this.raining && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
       } else {
         car.drs = false;
       }
