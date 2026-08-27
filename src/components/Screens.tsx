@@ -109,7 +109,11 @@ export function NewCareer({ onBack, onStart }: { onBack: () => void; onStart: (s
               <div className="text-[12px] text-[#9fb0c4] space-y-0.5">
                 <div>Мотор: {t.engineMaker}{t.works ? ' (заводская)' : ''}</div>
                 <div>Пилоты: {ds.map((d) => d.code).join(' / ') || '—'}</div>
-                <div className="num">Бюджет: {money(t.budget)} · Репутация: {t.reputation}</div>
+                <div className="num pt-1">
+                  <span className="text-[#d8f224] font-bold">{money(t.budget)}</span>
+                  <span className="text-[#7f8da0]"> на счету сейчас</span>
+                </div>
+                <div className="num">Репутация: {t.reputation}/100</div>
               </div>
             </button>
           );
@@ -122,7 +126,7 @@ export function NewCareer({ onBack, onStart }: { onBack: () => void; onStart: (s
             <TeamDot color={sel.color} color2={sel.color2} size={20} />
             <div>
               <div className="font-disp font-bold text-lg">{sel.name}</div>
-              <div className="text-[12px] text-[#9fb0c4]">{meta.fullName} · бюджет {money(sel.budget)}</div>
+              <div className="text-[12px] text-[#9fb0c4]">{meta.fullName} · <span className="num text-[#d8f224] font-bold">{money(sel.budget)}</span> на счету</div>
             </div>
           </div>
           <div className="grid sm:grid-cols-2 gap-x-8">

@@ -1238,6 +1238,14 @@ export interface SimCar {
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
 
+/** ИИ варьирует топливные режимы в зависимости от выбранной стратегии */
+function aiFuelMode(mode: StrategyPreset): 'eco' | 'normal' | 'push' {
+  if (mode === 'aggr') return rnd() < 0.7 ? 'push' : 'normal';
+  if (mode === 'cons') return rnd() < 0.7 ? 'eco' : 'normal';
+  const r = rnd();
+  return r < 0.15 ? 'push' : r < 0.35 ? 'eco' : 'normal';
+}
+
 export class RaceSim {
   gs: GameState;
   cars: SimCar[] = [];
@@ -1292,7 +1300,9 @@ export class RaceSim {
         mode: t.id === gs.playerTeamId ? gs.strategy[did] ?? 'balanced' : plan.mode,
         setup, qualiSeg: 'Q1',
         finished: false,
-        tireTemp: wetSession ? 55 : 74, fuelMode: 'normal', letThrough: false, letThroughLaps: 0,
+        tireTemp: wetSession ? 55 : 74,
+        fuelMode: t.id === gs.playerTeamId ? 'normal' : aiFuelMode(plan.mode),
+        letThrough: false, letThroughLaps: 0,
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1618,6 +1628,13 @@ export class RaceSim {
   aiDecide(car: SimCar) {
     if (car.isPlayer || car.status !== 'run' || car.pitting) return;
     if (this.kind !== 'race') return;
+    // топливный менеджмент: если не хватает до финиша — переход в ЭКО
+    const lapsLeft = this.totalLaps - car.lap;
+    const burn = car.fuelMode === 'push' ? 1.55 : car.fuelMode === 'eco' ? 1.15 : 1.35;
+    if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 3) {
+      car.fuelMode = 'eco';
+      if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} переходит в режим экономии топлива`, 'info');
+    }
     const cd = compoundDef(this.gs.playerSeries, car.tire);
     if (['AW', 'I', 'W'].includes(car.tire)) return;
     const wear = car.tireAge / cd.life;

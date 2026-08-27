@@ -49,6 +49,9 @@ export default function SessionLive({ stage, onDone, onAbort }: {
   const track = getTrack(circuit);
   const isQuali = kind === 'quali' || kind === 'sq';
   const isPractice = kind === 'practice';
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  pausedRef.current = paused;
 
   const finish = () => {
     dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
@@ -65,8 +68,10 @@ export default function SessionLive({ stage, onDone, onAbort }: {
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
-      acc += dtReal * BASE * speedRef.current;
-      while (acc > STEP) { simRef.current.tick(STEP); acc -= STEP; }
+      if (!pausedRef.current) {
+        acc += dtReal * BASE * speedRef.current;
+        while (acc > STEP) { simRef.current.tick(STEP); acc -= STEP; }
+      }
       force((x) => (x + 1) % 1000000);
       if (simRef.current.done) { finish(); return; }
       raf = requestAnimationFrame(loop);
@@ -95,7 +100,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
               </>
             ) : (
               <>
-                <p>Выберите программу работы для каждого пилота — машины будут сами выезжать на серии кругов и возвращаться в боксы, как в F1 Manager.</p>
+                <p>Ваши машины стоят в боксах: выпускайте их на трассу кнопкой «ВЫЕЗД», задавайте число кругов в серии и комплект шин.</p>
                 <p>Инженеры дают советы по настройкам после каждой серии. Менять настройки можно прямо по ходу практики.</p>
               </>
             )}
@@ -126,6 +131,10 @@ export default function SessionLive({ stage, onDone, onAbort }: {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="font-disp font-bold text-[22px] text-[#ffc94d] num mr-3">{sim.displayClock()}</span>
+          <button onClick={() => setPaused((p) => !p)}
+            className={`px-3 py-0.5 border font-disp text-[10px] font-bold transition-all ${paused ? 'bg-[#4ade80] text-[#0d1016] border-[#4ade80]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+            {paused ? '▶ ПРОДОЛЖИТЬ' : '⏸ ПАУЗА'}
+          </button>
           {SPEEDS.map((m) => (
             <button key={m} onClick={() => setSpeed(m)}
               className={`px-2 py-0.5 border font-disp text-[10px] font-bold transition-all ${speed === m ? 'bg-[#d8f224] text-[#10131a] border-[#d8f224]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>

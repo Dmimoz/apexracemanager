@@ -35,6 +35,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   simRef.current = sim;
   const [, force] = useState(0);
   const track = getTrack(circuit);
+  const [paused, setPaused] = useState(false);
+  const pausedRef = useRef(false);
+  pausedRef.current = paused;
+  const prevPhaseRef = useRef<string>('green');
 
   useEffect(() => {
     if (!started) return;
@@ -46,11 +50,19 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
-      acc += dtReal * BASE * speedRef.current;
-      while (acc > STEP) { simRef.current.tick(STEP); acc -= STEP; }
+      const s = simRef.current;
+      // авто-пауза при появлении машины безопасности / красных флагов
+      if (s.phase !== prevPhaseRef.current) {
+        if (s.phase === 'sc' || s.phase === 'vsc' || s.phase === 'red') setPaused(true);
+        prevPhaseRef.current = s.phase;
+      }
+      if (!pausedRef.current) {
+        acc += dtReal * BASE * speedRef.current;
+        while (acc > STEP) { s.tick(STEP); acc -= STEP; }
+      }
       force((x) => (x + 1) % 1000000);
-      if (simRef.current.done) {
-        dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
+      if (s.done) {
+        dispatch({ type: 'APPLY_SESSION', sim: s, stage });
         onDone();
         return;
       }
@@ -99,6 +111,15 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {(sim.phase === 'sc' || sim.phase === 'vsc' || sim.phase === 'red') && (
+            <span className={`font-disp text-[9px] font-bold px-2 py-0.5 blink ${sim.phase === 'red' ? 'bg-[#c8102e] text-white' : 'bg-[#ffc94d] text-[#1a1408]'}`}>
+              {sim.phase === 'red' ? 'КРАСНЫЙ ФЛАГ' : sim.phase === 'sc' ? 'МАШИНА БЕЗОПАСНОСТИ' : 'ВИРТУАЛЬНЫЙ SC'}
+            </span>
+          )}
+          <button onClick={() => setPaused((p) => !p)}
+            className={`px-3 py-0.5 border font-disp text-[10px] font-bold transition-all ${paused ? 'bg-[#4ade80] text-[#0d1016] border-[#4ade80]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+            {paused ? '▶ ПРОДОЛЖИТЬ' : '⏸ ПАУЗА'}
+          </button>
           <span className="text-[9px] font-disp font-bold tracking-widest text-[#5a6a80] mr-1">СКОРОСТЬ</span>
           {SPEEDS.map((m) => (
             <button key={m} onClick={() => setSpeed(m)}
@@ -108,6 +129,11 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
           ))}
         </div>
       </header>
+      {paused && (
+        <div className="shrink-0 px-4 py-1 bg-[#141a10] border-b border-[#2f8f4e55] text-[11px] text-[#4ade80] font-semibold">
+          ⏸ Симуляция на паузе{(sim.phase === 'sc' || sim.phase === 'vsc' || sim.phase === 'red') ? ' — нейтралитет: спланируйте стратегию (пит-стоп под SC теряет вдвое меньше)' : ''}
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0">
         {/* ЛЕВО: крупная таблица отрывов */}
