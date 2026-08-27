@@ -94,9 +94,11 @@ export default function WeekendScreen({ onStartSession }: { onStartSession: (sta
             <Btn variant="acc" className="pulse-acc" onClick={() => onStartSession(stage)}>
               <Icon name="play" />ТРАНСЛЯЦИЯ
             </Btn>
-            <Btn onClick={() => dispatch({ type: 'SKIP_SESSION' })}>
-              <Icon name="chev" />ПРОПУСТИТЬ СЕССИЮ
-            </Btn>
+            {(isPractice || isQuali) && (
+              <Btn onClick={() => dispatch({ type: 'SKIP_SESSION' })}>
+                <Icon name="chev" />ПРОПУСТИТЬ СЕССИЮ
+              </Btn>
+            )}
           </div>
         </Panel>
 

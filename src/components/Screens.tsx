@@ -839,30 +839,46 @@ function NegoPanel({ did }: { did: string }) {
 
 function StaffRow({ s }: { s: Staff }) {
   const { gs, dispatch, say } = useGame();
+  const [, force] = useState(0);
+  const bump = () => force((x) => x + 1);
   const t = s.teamId ? gs.teams[s.teamId] : null;
   const nego = gs.staffNegos[s.id];
   const hasDeal = gs.staffDeals.some((x) => x.sid === s.id);
   return (
-    <div className="border-b border-[#1d242f] py-2 flex items-center gap-2.5 flex-wrap">
-      <span className="font-semibold text-[13px]">{s.name}</span>
-      <span className="text-[11px] text-[#7f8da0]">{ROLE_NAMES[s.role]} · {t?.short ?? '—'}</span>
-      <span className="ml-auto flex items-center gap-2">
-        <span className="num font-bold text-[13px]" style={{ color: s.skill >= 85 ? '#4ade80' : '#ffc94d' }}>{s.skill}</span>
-        {hasDeal ? <span className="font-disp text-[9px] font-bold text-[#4ade80]">СДЕЛКА ✓</span>
-          : nego ? (
-            <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#ffc94d] text-[#ffc94d]"
-              onClick={() => say(negoStaff(gs, dispatch, s.id))}>ПРЕДЛОЖИТЬ {money(nego.offerSalary)}</button>
-          ) : (
-            <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#2a3442] hover:border-[#d8f224] hover:text-[#d8f224] transition-colors"
-              onClick={() => { dispatch({ type: 'STAFF_NEGO', sid: s.id, slotRole: s.role }); say('Переговоры начаты'); }}>ПЕРЕГОВОРЫ</button>
-          )}
-      </span>
+    <div className="border-b border-[#1d242f] py-2">
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <span className="font-semibold text-[13px]">{s.name}</span>
+        <span className="text-[11px] text-[#7f8da0]">{ROLE_NAMES[s.role]} · {t?.short ?? '—'}</span>
+        <span className="ml-auto flex items-center gap-2">
+          <span className="num font-bold text-[13px]" style={{ color: s.skill >= 85 ? '#4ade80' : '#ffc94d' }}>{s.skill}</span>
+          {hasDeal ? <span className="font-disp text-[9px] font-bold text-[#4ade80]">СДЕЛКА ✓</span>
+            : nego ? (
+              nego.agreed
+                ? <span className="font-disp text-[9px] font-bold text-[#4ade80]">СОГЛАСЕН ✓</span>
+                : <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#ffc94d] text-[#ffc94d] hover:bg-[#ffc94d] hover:text-[#1a1408] transition-colors"
+                    onClick={() => { dispatch({ type: 'OFFER_STAFF', sid: s.id }); bump(); say('Предложение отправлено'); }}>
+                    ПРЕДЛОЖИТЬ {money(nego.offerSalary)}
+                  </button>
+            ) : (
+              <button className="font-disp text-[9px] font-bold px-2 py-1 border border-[#2a3442] hover:border-[#d8f224] hover:text-[#d8f224] transition-colors"
+                onClick={() => { dispatch({ type: 'STAFF_NEGO', sid: s.id, slotRole: s.role }); bump(); say('Переговоры начаты'); }}>ПЕРЕГОВОРЫ</button>
+            )}
+        </span>
+      </div>
+      {nego && !nego.agreed && !hasDeal && (
+        <div className="ml-0 mt-1.5 flex items-center gap-2 text-[11px] text-[#7f8da0] flex-wrap">
+          <span>Требует <b className="num text-[#9fb0c4]">{money(nego.askSalary)}</b>/год</span>
+          <span className="w-14">Офер:</span>
+          <input type="range" min={Math.round(nego.askSalary * 0.5)} max={Math.round(nego.askSalary * 1.6)} step={25000}
+            value={nego.offerSalary} onChange={(e) => { nego.offerSalary = +e.target.value; bump(); }} className="flex-1 min-w-[120px] accent-[#d8f224]" />
+          <span className="num w-16 text-right text-[#9fb0c4]">{money(nego.offerSalary)}</span>
+          {nego.collapsed && <span className="text-[#ff6b4b] font-semibold">— сорваны</span>}
+          <button className="font-disp text-[8px] font-bold px-1.5 py-0.5 border border-[#2a3442] hover:border-[#ff6b4b] hover:text-[#ff6b4b] transition-colors"
+            onClick={() => dispatch({ type: 'CANCEL_STAFF_NEGO', sid: s.id })}>ПРЕРВАТЬ</button>
+        </div>
+      )}
     </div>
   );
-}
-function negoStaff(gs: import('../game/types').GameState, dispatch: (a: { type: 'OFFER_STAFF'; sid: string }) => void, sid: string): string {
-  dispatch({ type: 'OFFER_STAFF', sid });
-  return 'Предложение отправлено';
 }
 
 /* ---- Редактор ---- */
