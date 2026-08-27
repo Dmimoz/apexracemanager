@@ -27,9 +27,10 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
   const meta = SERIES_META[sid];
   const circuit = circuitOfRound(gs, sid, w.roundIdx);
   const stage = w.stages[w.stageIdx];
+  const over = stage === undefined; // все стадии отыграны — уик-энд завершён
   const isQuali = stage === 'quali' || stage === 'sq';
   const isRaceStage = stage === 'race' || stage === 'sprint' || stage === 'sprintRev';
-  const isPractice = !isQuali && !isRaceStage;
+  const isPractice = !isQuali && !isRaceStage && !over;
   const myDrivers = raceDriversOfTeam(gs, gs.playerTeamId);
   const rookies = availableRookies(gs);
   const [rookieSel, setRookieSel] = useState<string>(rookies[0]?.id ?? '');
@@ -42,8 +43,48 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
   const [briefing] = useState(() => engineerSetupAdvice(gs, circuit));
   const showBriefing = w.stageIdx === 0 && isPractice;
 
-  // парк-ферме: с начала квалификации и до конца уик-энда настройки менять нельзя
-  const setupLocked = isQuali || pastStages.some((s) => s === 'quali' || s === 'sq');
+  // парк-ферме: с начала квалификации (её результат уже есть) и до конца уик-энда
+  const setupLocked = pastStages.some((s) => s === 'quali' || s === 'sq');
+
+  // ---- УИК-ЭНД ЗАВЕРШЁН: итоги всех сессий + кнопка в штаб ----
+  if (over) {
+    return (
+      <div className="min-h-screen pb-16">
+        <header className="border-b border-[#252e3b] bg-[#0d1117cc] backdrop-blur sticky top-0 z-30">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4 flex-wrap">
+            <span className="font-disp font-black text-2xl text-[#ff2d2d]">APEX</span>
+            <div>
+              <div className="font-disp font-bold text-[16px] leading-tight">{circuit.name}</div>
+              <div className="text-[11px] text-[#7f8da0]">{circuit.country} · этап {w.roundIdx + 1} · {meta.fullName}</div>
+            </div>
+            <span className="ml-auto font-disp text-[11px] font-bold px-3 py-1.5 bg-[#2f8f4e] text-white">🏁 УИК-ЭНД ЗАВЕРШЁН</span>
+          </div>
+        </header>
+        <main className="max-w-6xl mx-auto px-4 py-6 space-y-5">
+          <Panel title="Итоги уик-энда" accent>
+            <div className="space-y-5">
+              {w.stages.map((st) => {
+                const r = w.results[st];
+                if (!r) return null;
+                return (
+                  <div key={st}>
+                    <div className="font-disp text-[11px] font-bold tracking-[0.18em] text-[#9fb0c4] mb-2 uppercase">{r.title}</div>
+                    {r.notes.map((n, i) => <div key={i} className="text-[12px] text-[#7f8da0] mb-1">· {n}</div>)}
+                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} />
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+          <div className="flex justify-center pt-2">
+            <Btn variant="acc" className="pulse-acc !px-10 !py-3" onClick={() => dispatch({ type: 'BACK_TO_HUB' })}>
+              <Icon name="chev" />В ШТАБ — ПРОДОЛЖИТЬ СЕЗОН
+            </Btn>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pb-16">
@@ -158,7 +199,14 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
 
           {w.weather[stage] !== 'wet' && (
             <div className="mb-3">
-              <div className="font-disp text-[10px] font-bold tracking-[0.2em] text-[#7f8da0] mb-1.5 uppercase">Стартовый комплект — ваши машины</div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="font-disp text-[10px] font-bold tracking-[0.2em] text-[#7f8da0] uppercase">Стартовый комплект — ваши машины</div>
+                {isRaceStage && (
+                  <div className="num text-[11px] text-[#d8f224] font-semibold">
+                    Дистанция: {(() => { const L = raceLapsFor(gs, stage as 'race' | 'sprint' | 'sprintRev', circuit); return `${L} кругов · ${(L * circuit.lenKm).toFixed(0)} км`; })()}
+                  </div>
+                )}
+              </div>
               {myDrivers.map((d) => {
                 const cur = startTires[d.id] ?? compoundDef(sid, driverSetupTireDefault(sid)).id;
                 return (

@@ -1480,10 +1480,11 @@ export class RaceSim {
 
     // ---- СПРИНТЫ: один stint, комплект подбирается так, чтобы доехать без пит-стопа ----
     if (isSprint) {
-      // ищем самый мягкий состав, ресурса которого хватит на всю дистанцию
+      // ищем самый мягкий состав, износа которого хватит на всю дистанцию с запасом (цель — 75%, не входя в зону проколов)
       const dry = dryCompounds(sid).slice().sort((a, b) => a.offset - b.offset);
+      const sprintLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.75 / modeF);
       let chosen = dry[dry.length - 1]?.id ?? 'M';
-      for (const cd of dry) { if (effLife(cd.id) >= laps) { chosen = cd.id; break; } }
+      for (const cd of dry) { if (sprintLife(cd.id) >= laps) { chosen = cd.id; break; } }
       return { startTire: chosen, stints: [chosen], pitLaps: [], mode };
     }
 
@@ -1798,39 +1799,61 @@ export class RaceSim {
   /** Живые решения ИИ: пит под SC, пит до зоны проколов, экономия топлива */
   aiDecide(car: SimCar) {
     if (car.isPlayer || car.status !== 'run' || car.pitting) return;
-    if (this.kind !== 'race') return;
-    // топливный менеджмент: если не хватает до финиша — переход в ЭКО
+    if (this.kind !== 'race' && this.kind !== 'sprint' && this.kind !== 'sprintRev') return;
+    const isSprint = this.kind !== 'race';
     const lapsLeft = this.totalLaps - car.lap;
-    const burn = car.fuelMode === 'push' ? 1.42 : car.fuelMode === 'eco' ? 1.05 : 1.25;
-    if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 2) {
-      car.fuelMode = 'eco';
-      if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} переходит в режим экономии топлива`, 'info');
+    // топливный менеджмент (только в гонке: в спринте бак заправлен под дистанцию)
+    if (!isSprint) {
+      const burn = car.fuelMode === 'push' ? 1.42 : car.fuelMode === 'eco' ? 1.05 : 1.25;
+      if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 2) {
+        car.fuelMode = 'eco';
+        if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} переходит в режим экономии топлива`, 'info');
+      }
     }
     if (['AW', 'I', 'W'].includes(car.tire)) return;
+    const cd = compoundDef(this.gs.playerSeries, car.tire);
     const wear = this.wearFrac(car);
+    const wpl = this.wearPerLap(car) / cd.life; // доля износа за круг
     const nextPlanned = car.pitLaps.find((l) => l > car.lap);
-    const lapsToNext = nextPlanned != null ? nextPlanned - car.lap : Infinity;
-    const soon = lapsToNext <= 2;
-    // под машиной безопасности пит «почти бесплатный» — ИИ этим пользуется
-    if ((this.phase === 'sc' || this.phase === 'vsc') && !soon && car.lap < this.totalLaps - 3 && wear > 0.45 && rnd() < 0.8) {
-      car.pitLaps.push(car.lap + 1);
-      this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
+
+    // СПРИНТ: плановых питов нет — ИИ бережёт резину, чтобы износ не вошёл в зону проколов (80%)
+    if (isSprint) {
+      if (wear > 0.4 && car.mode !== 'cons') {
+        car.mode = 'cons';
+        if (rnd() < 0.4) this.event(car.lap, `${car.code} бережёт резину — щадящий режим`, 'info');
+      }
+      if (wear > 0.7 && nextPlanned == null && car.lap < this.totalLaps - 2) {
+        car.pitLaps.push(car.lap + 1);
+        this.event(car.lap, `${car.code}: вынужденный заезд — риск прокола`, 'pit');
+      }
       return;
+    }
+    // под машиной безопасности пит «почти бесплатный» — ИИ переносит дальний стоп на этот круг
+    if ((this.phase === 'sc' || this.phase === 'vsc') && car.lap < this.totalLaps - 3 && wear > 0.35 && rnd() < 0.8) {
+      if (nextPlanned == null || nextPlanned - car.lap > 2) {
+        car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
+        car.pitLaps.push(car.lap + 1);
+        this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
+        return;
+      }
     }
     // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финища
-    const cd = compoundDef(this.gs.playerSeries, car.tire);
-    const wpl = this.wearPerLap(car) / cd.life; // доля износа за круг
-    const targetLap = nextPlanned ?? this.totalLaps;
-    const projected = wear + (targetLap - car.lap) * wpl;
-    if (projected > 0.75 && !soon && car.lap < this.totalLaps - 2) {
-      car.pitLaps.push(car.lap + 1);
-      this.event(car.lap, wear > 0.62
-        ? `${car.code}: износ ${Math.round(wear * 100)}% — заезд до зоны проколов`
-        : `${car.code}: бережёт резину — ранний пит-стоп`, 'pit');
+    const projectedEnd = wear + lapsLeft * wpl;
+    if (projectedEnd > 0.7 && car.lap < this.totalLaps - 2) {
+      const lapsTo70 = wpl > 0 ? Math.floor((0.7 - wear) / wpl) : lapsLeft;
+      const desired = car.lap + clamp(lapsTo70, 1, lapsLeft - 1);
+      if (nextPlanned == null) {
+        car.pitLaps.push(desired);
+        this.event(car.lap, `${car.code}: пит-стоп через ${desired - car.lap} круг(а) — беречь резину`, 'pit');
+      } else if (nextPlanned > desired + 1) {
+        car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
+        car.pitLaps.push(desired);
+      }
       return;
     }
-    // аварийный пит, если уже в зоне проколов
-    if (wear > 0.8 && !soon && car.lap < this.totalLaps - 2) {
+    // аварийный пит у самой зоны проколов
+    if (wear > 0.78 && car.lap < this.totalLaps - 2 && (nextPlanned == null || nextPlanned > car.lap + 1)) {
+      car.pitLaps = car.pitLaps.filter((l) => l !== nextPlanned);
       car.pitLaps.push(car.lap + 1);
       this.event(car.lap, `${car.code}: резина на пределе — вынужденный заезд`, 'pit');
     }
@@ -2083,8 +2106,9 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     ss.current++;
     tickUpgrades(gs);
     aiDevelopment(gs); // ИИ-команды развивают болиды между этапами
-    gs.phase = 'hub';
-    gs.weekend = null;
+    // уик-энд завершён, но остаётся открытым: игрок видит итоговые результаты и сам уходит в штаб
+    w.stageIdx = w.stages.length;
+    gs.phase = 'weekend';
     const leader = Object.entries(ss.dStand).sort((a, b) => b[1] - a[1])[0];
     pushNews(gs, `Итог «${sim.circuit.name}»: победил ${gs.drivers[winner.did].name}. Лидер ЧМ: ${leader ? gs.drivers[leader[0]].name : '—'}`, 'ЧЕМПИОНАТ');
   }

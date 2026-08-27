@@ -48,6 +48,8 @@ function reducer(gs: GameState, a: Action): GameState {
       return g;
     case 'BACK_TO_HUB':
       g.phase = 'hub';
+      // если уик-энд уже отыгран (все стадии позади) — закрываем его
+      if (g.weekend && g.weekend.stageIdx >= g.weekend.stages.length) g.weekend = null;
       return g;
     case 'SKIP_SESSION': {
       const res = skipSession(g);
