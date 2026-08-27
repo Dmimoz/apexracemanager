@@ -40,7 +40,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
   const grid = sessionGridFor(gs, stage);
   const [sim] = useState<SessionSim>(() => makeSessionSim(gs, kind, grid, circuit, w.weather[stage] === 'wet'));
   const [started, setStarted] = useState(false);
-  const [speed, setSpeed] = useState(2);
+  const [speed, setSpeed] = useState(1);
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const simRef = useRef(sim);
@@ -64,7 +64,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
     let last = performance.now();
     let acc = 0;
     const STEP = 1 / 240;
-    const BASE = 6; // базовая скорость ×1 (таймер согласован с временем круга)
+    const BASE = 24; // 1 реальная сек = 24 сим-сек: круг ~3.7 с, часовая практика ~2.5 мин
     const loop = (now: number) => {
       const dtReal = Math.min(0.05, (now - last) / 1000);
       last = now;
@@ -193,7 +193,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
           <div className="p-2 space-y-2">
             {playerCars.map((car) => {
               const cd = compoundDef(sid, car.tire);
-              const wear = Math.min(100, Math.round((car.tireAge / cd.life) * 100));
+              const wear = Math.min(100, Math.round(car.wear));
               const onTrack = car.state === 'flying';
               return (
                 <div key={car.did} className="border border-[#2a3442] bg-[#10151d] p-2.5">

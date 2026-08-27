@@ -765,7 +765,7 @@ export interface SessionCar {
   phase2: 'out' | 'push' | 'in';
   pushed: number; runLen: number;
   exitAt: number;
-  tire: string; tireAge: number;
+  tire: string; tireAge: number; wear: number;
   perf: number; skill: number; cons: number;
   pos: number; status: 'run' | 'park'; pitting: boolean;
   eliminatedIn: string | null;
@@ -843,7 +843,7 @@ export class SessionSim {
         state: 'garage', phase2: 'out', pushed: 0,
         runLen: 4,
         exitAt: (0.03 + rnd() * 0.2) * this.segments[0].simClock + i * 3,
-        tire: this.pickTire(), tireAge: 0,
+        tire: this.pickTire(), tireAge: 0, wear: 0,
         perf: carPerf(gs, t, circuit),
         skill: driverSkill(d, 'quali', wetSession),
         cons: d.consistency,
@@ -890,8 +890,19 @@ export class SessionSim {
     const noise = (1.4 - car.cons / 100) * 0.4 * (rnd() * 2 - 1);
     const wetPen = this.raining ? 9 + (100 - car.cons) * 0.03 : 0;
     const setupD = car.isPlayer ? setupLapDelta(car.setup, c) : 0; // ИИ уже «оптимален»
+    // просадка темпа по мере износа: мягкая до 60%, прогрессирующая после
+    const w = car.wear / 100;
+    const wearPen = w <= 0.6 ? w * 1.6 : 0.96 + (w - 0.6) * 3.4;
     return baseLap(c, this.gs.playerSeries) + 10.4 - car.perf * 0.085 - car.skill * 0.06
-      + cd.offset + car.tireAge * 0.015 + noise + wetPen + setupD;
+      + cd.offset + wearPen + noise + wetPen + setupD;
+  }
+
+  /** Износ за круг в сессиях (%): в практиках резину берегут, в квалификации — атакуют */
+  wearPerLap(car: SessionCar): number {
+    const cd = compoundDef(this.gs.playerSeries, car.tire);
+    const base = 100 / cd.life;
+    const attack = car.program === 'quali' || this.kind !== 'practice' ? 1.15 : car.program === 'race' ? 1.0 : 0.85;
+    return base * 0.62 * attack;
   }
 
   tick(dt: number) {
@@ -951,6 +962,7 @@ export class SessionSim {
       this.recordLap(car, lapTime);
       car.pushed++;
       car.tireAge++;
+      car.wear += this.wearPerLap(car);
       if (car.pushed >= car.runLen || car.boxNext) car.phase2 = 'in';
     } else {
       lapTime += 5 + rnd() * 2;
@@ -995,11 +1007,11 @@ export class SessionSim {
   serviceTires(car: SessionCar) {
     const sid = this.gs.playerSeries;
     if (sid === 'fe') return; // всесезонные шины — без замен
-    if (this.raining) { car.tire = 'I'; car.tireAge = 0; return; }
+    if (this.raining) { car.tire = 'I'; car.tireAge = 0; car.wear = 0; return; }
     const dry = dryCompounds(sid);
     const soft = dry[0]?.id ?? car.tire;
     const med = dry.length > 1 ? dry[1].id : soft;
-    const wear = car.tireAge / Math.max(1, compoundDef(sid, car.tire).life);
+    const wear = car.wear / 100;
     let next: string | null = null;
     if (!car.manual && rnd() < 0.35) {
       next = dry[Math.floor(rnd() * dry.length)].id;   // ИИ сам тасует составы
@@ -1007,9 +1019,9 @@ export class SessionSim {
     if (next && next !== car.tire) {
       this.event(0, `${car.code} сменил шины: ${tireName(sid, car.tire)} → ${tireName(sid, next)}`);
       car.tire = next;
-      car.tireAge = 0;
+      car.tireAge = 0; car.wear = 0;
     } else if (car.tireAge > 0 && wear > 0.5) {
-      car.tireAge = 0; // свежий комплект того же состава (состав для игрока выбирает он сам)
+      car.tireAge = 0; car.wear = 0; // свежий комплект того же состава
     }
   }
 
@@ -1122,6 +1134,7 @@ export class SessionSim {
     this.event(0, `${car.code}: ставим ${tireName(this.gs.playerSeries, tireId)}`);
     car.tire = tireId;
     car.tireAge = 0;
+    car.wear = 0;
   }
 
   /** Настройки крутятся только в практике (парк-ферме с начала квалификации) */

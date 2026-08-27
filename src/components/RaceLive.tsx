@@ -28,7 +28,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
     grid, circuit, w.weather[stage] === 'wet', w.rainMidRace, startTires,
   ));
   const [started, setStarted] = useState(false);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(8); // ×1 — замедленный просмотр, ×8 — комфортный темп
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const simRef = useRef(sim);
@@ -147,7 +147,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
               const team = gs.teams[car.tid];
               const tire = compoundDef(sid, car.tire);
               const isOut = car.status === 'out';
-              const wear = Math.min(100, Math.round((car.tireAge / tire.life) * 100));
+              const wear = Math.min(100, Math.round((car.wear / tire.life) * 100));
               const wearCol = wear > 85 ? '#ff6b4b' : wear > 60 ? '#ffc94d' : '#4ade80';
               const isPurple = car.lastLap != null && car.bestLap != null && car.lastLap <= car.bestLap + 0.001;
               return (
@@ -188,7 +188,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
               {playerCars.map((car) => {
                 const scheduled = sim.pitScheduled(car.did);
                 const tire = compoundDef(sid, car.tire);
-                const wearPct = Math.min(100, Math.round((car.tireAge / tire.life) * 100));
+                const wearPct = Math.min(100, Math.round((car.wear / tire.life) * 100));
                 const wearColor = wearPct > 85 ? '#ff6b4b' : wearPct > 60 ? '#ffc94d' : '#4ade80';
                 const lapsLeft = Math.max(0, sim.totalLaps - car.lap);
                 const burn = car.fuelMode === 'push' ? 1.55 : car.fuelMode === 'eco' ? 1.15 : 1.35;
