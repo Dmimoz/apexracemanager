@@ -1929,8 +1929,12 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
   }
   for (const t of Object.values(gs.teams)) t.wear = clamp(t.wear, 0, 130);
 
+  // призовые за позицию КАЖДОГО вашего пилота + бонус за быстрый круг в топ-10
   const prizeTable = [0, 500_000, 350_000, 250_000, 150_000, 100_000, 80_000, 60_000, 45_000, 30_000, 20_000];
-  const earned = myBest != null ? prizeTable[Math.min(myBest, 10)] ?? 10_000 : 0;
+  const myPos = rows.filter((r) => r.tid === gs.playerTeamId).map((r) => r.pos);
+  let earned = myPos.reduce((s, p) => s + (prizeTable[Math.min(p, 10)] ?? 10_000), 0);
+  const myFl = rows.find((r) => r.tid === gs.playerTeamId && r.pos <= 10 && r.note?.includes('БК'));
+  if (myFl) earned += 40_000; // бонус за быстрейший круг
   if (myBest === 1) { gs.careerWins++; pushNews(gs, `ПОБЕДА! ${gs.drivers[winner.did].name} выигрывает «${sim.circuit.name}»`, 'ГОНКА'); }
   else if (myBest != null && myBest <= 3) gs.careerPodiums++;
   const income = Math.round(earned * SERIES_META[sid].budgetFactor * gs.mods.payMod);
@@ -2118,7 +2122,14 @@ export function startNego(gs: GameState, did: string): string | null {
   const askSalary = Math.round(Math.max(d.salary, d.value * 0.08) * (1.1 + rnd() * 0.4));
   const askBonus = Math.round(d.value * (0.06 + rnd() * 0.09));
   const fromTeam = d.teamId ? gs.teams[d.teamId] : null;
-  const feeAsk = fromTeam ? Math.round(d.value * (0.22 + rnd() * 0.4) * Math.max(0.5, d.contract * 0.45)) : 0;
+  // отступные: рыночная цена × контрактный множитель (экспонента) × нежелание сильной команды
+  let feeAsk = 0;
+  if (fromTeam) {
+    const contractMult = 1 + (Math.max(0, d.contract) - 1) * 0.55;   // длинный контракт = дорого
+    const strengthMult = 0.85 + fromTeam.reputation / 250;            // топ-команды заламывают цену
+    const starMult = d.pace > 86 ? 1 + (d.pace - 86) * 0.04 : 1;      // звёзды дороже
+    feeAsk = Math.round(d.value * (0.4 + rnd() * 0.25) * contractMult * strengthMult * starMult);
+  }
   gs.negos[did] = {
     did, interest, askSalary, askBonus, askYears: 1 + Math.floor(rnd() * 2),
     offerSalary: askSalary, offerBonus: askBonus, offerYears: 1 + Math.floor(rnd() * 2),
@@ -2157,13 +2168,20 @@ export function offerFeeToTeam(gs: GameState, did: string): string {
   if (!n || n.feeAgreed || n.collapsed || !d.teamId) return '';
   const fromTeam = gs.teams[d.teamId];
   const ratio = n.feeOffer / Math.max(1, n.feeAsk);
+  // команда категорически не отпустит лидера/звезду за бесценок при длинном контракте
+  const isKeyDriver = d.pace > 84 || fromTeam.staffIds.length > 0 && raceDriversOfTeam(gs, fromTeam.id)[0]?.id === did;
+  if (ratio < 0.45 && isKeyDriver && d.contract >= 2) {
+    n.collapsed = true;
+    return `${fromTeam.short}: «${d.name} не продаётся. Переговоры окончены»`;
+  }
   const p = clamp(0.4 + (ratio - 1) * 2.4 + (100 - fromTeam.reputation) / 300, 0.05, 0.95);
   if (rnd() < p) {
     n.feeAgreed = true;
     maybeSealDeal(gs, did);
     return `${fromTeam.short} отпускает ${d.name} за ${money(n.feeOffer)}`;
   }
-  n.feeAsk = Math.round(n.feeAsk * (ratio > 0.8 ? 0.93 : 0.98));
+  // торг: команда уступает тем охотнее, чем ближе офер к её цене
+  n.feeAsk = Math.round(n.feeAsk * (ratio > 0.85 ? 0.9 : ratio > 0.6 ? 0.95 : 0.99));
   return `${fromTeam.short}: «Цена ниже рыночной». Новая планка: ${money(n.feeAsk)}`;
 }
 
@@ -2402,9 +2420,17 @@ export function endSeason(gs: GameState) {
     d.form = 68 + Math.round(rnd() * 14);
     d.value = Math.round(d.value * (1 + r * 0.02));
   }
+  const pt = playerTeam(gs);
+  // расходы: зарплаты пилотов и персонала за сезон
+  const driverWages = raceDriversOfTeam(gs, pt.id).reduce((s, d) => s + d.salary, 0);
+  const staffWages = pt.staffIds.reduce((s, id) => s + (gs.staff[id]?.salary ?? 0), 0);
+  const wages = driverWages + staffWages;
+  gs.budget = Math.max(0, gs.budget - wages);
+  pt.budget = Math.max(0, pt.budget - wages);
+  pushNews(gs, `Расходы на зарплаты: ${money(wages)} (пилоты ${money(driverWages)} + персонал ${money(staffWages)})`, 'ФИНАНСЫ');
+  // призовые за место в Кубке конструкторов
   const prize = Math.round((2_500_000 * meta.budgetFactor * (1 + (11 - Math.min(playerPos, 11)) * 0.09)) * gs.mods.payMod);
   gs.budget += prize;
-  const pt = playerTeam(gs);
   pt.budget += prize;
   pushNews(gs, `Призовые за ${playerPos}-е место: ${money(prize)}`, 'ФИНАНСЫ');
   if (playerPos === 1) { gs.careerTitles++; pushNews(gs, '🏆 ВАША КОМАНДА — ЧЕМПИОН СРЕДИ КОНСТРУКТОРОВ!', 'ТРИУМФ'); }
