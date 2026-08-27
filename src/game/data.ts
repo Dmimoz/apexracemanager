@@ -84,10 +84,13 @@ export const ROLE_NAMES: Record<StaffRole, string> = {
   techdir: 'Техдиректор', aero: 'Шеф аэродинамики', mechanic: 'Главный механик', engineer: 'Гоночный инженер',
 };
 
-/** Ф1: 5 должностей (без шефа стратегии). Ф2/Ф3: 4 (без шефа аэро и без шефа стратегии). */
-export function staffRolesFor(sid: SeriesId): StaffRole[] {
-  if (sid === 'f2' || sid === 'f3') return ['techdir', 'mechanic', 'engineer', 'engineer'];
-  return ['techdir', 'aero', 'mechanic', 'engineer', 'engineer'];
+/** Гоночных инженеров — по числу пилотов в команде (у каждого пилота свой).
+ *  Ф2/Ф3: без шефа аэро (серийная техника). Шефа стратегии нет нигде. */
+export function staffRolesFor(sid: SeriesId, nDrivers: number): StaffRole[] {
+  const nEng = Math.max(1, nDrivers);
+  const eng: StaffRole[] = Array(nEng).fill('engineer');
+  if (sid === 'f2' || sid === 'f3') return ['techdir', 'mechanic', ...eng];
+  return ['techdir', 'aero', 'mechanic', ...eng];
 }
 
 /* ================= КОМАНДЫ ================= */
@@ -337,7 +340,8 @@ export const JUNIOR_FIRST = ['Марк', 'Энцо', 'Тео', 'Луи', 'Дан
 export const JUNIOR_LAST = ['Соланер', 'Фабр', 'Крамер', 'Верне', 'Кинт', 'Ветров', 'Бри', 'Собо', 'Руччи', 'Хальм', 'Моран', 'Дюбуа', 'Кляйн', 'Росси', 'Линд', 'Харт', 'Новак', 'Бьянки', 'Окада', 'Валье'];
 
 export function makeStaff(t: Team, rnd: () => number): Staff[] {
-  const roles = staffRolesFor(t.seriesId);
+  const nDrivers = DRIVERS.filter((d) => d.teamId === t.id).length || 2;
+  const roles = staffRolesFor(t.seriesId, nDrivers);
   const pre = F1_STAFF.filter((s) => s[3] === t.id);
   const out: Staff[] = [];
   roles.forEach((role, i) => {

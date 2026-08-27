@@ -103,8 +103,8 @@ export interface Negotiation {
   driverAgreed: boolean; feeAsk: number; feeOffer: number; feeAgreed: boolean; collapsed: boolean;
 }
 export interface Deal { did: string; fee: number; salary: number; years: number; }
-export interface StaffNegotiation { sid: string; askSalary: number; offerSalary: number; agreed: boolean; collapsed: boolean; slotRole: StaffRole; }
-export interface StaffDeal { sid: string; salary: number; slotRole: StaffRole; }
+export interface StaffNegotiation { sid: string; askSalary: number; offerSalary: number; agreed: boolean; collapsed: boolean; slotIdx: number; }
+export interface StaffDeal { sid: string; salary: number; slotIdx: number; }
 
 export type Phase = 'hub' | 'weekend' | 'summary' | 'market';
 

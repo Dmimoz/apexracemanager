@@ -1481,7 +1481,8 @@ export class RaceSim {
     const modeF = car.mode === 'aggr' ? 1.55 : car.mode === 'cons' ? 0.6 : 1;
     const fuelF = car.fuelMode === 'push' ? 1.25 : car.fuelMode === 'eco' ? 0.8 : 1;
     const degF = 0.55 + this.circuit.deg * 0.65; // абразивность трассы (0.7 → 1.0)
-    return degF * this.degMod * modeF * fuelF
+    const neutralF = this.phase === 'sc' || this.phase === 'vsc' ? 0.3 : 1; // под SC/VSC резину берегут
+    return degF * this.degMod * modeF * fuelF * neutralF
       * tireCareFactor(this.gs, car.tid) * setupWearMult(car.setup);
   }
 
@@ -1558,11 +1559,11 @@ export class RaceSim {
     const lead = this.leader();
 
     if (this.phase === 'sc' || this.phase === 'vsc') {
-      // Машина безопасности собирает пелотон
+      // Машина безопасности: темп на 30% ниже боевого, пелотон сбивается максимально плотно
       const sorted = this.runningSorted();
-      const gap = this.phase === 'sc' ? 26 : 110;
+      const gap = this.phase === 'sc' ? 12 : 45;   // дистанция между машинами, м
       const crawlCap = this.track.total / lead.targetLap;
-      const catchMul = this.phase === 'sc' ? 1.0 : 0.72;
+      const catchMul = this.phase === 'sc' ? 0.97 : 0.75;
       let prevDist = -1e9;
       for (let rank = 0; rank < sorted.length; rank++) {
         const car = sorted[rank];
@@ -1573,10 +1574,12 @@ export class RaceSim {
           if (car.pitCrawl <= 0) { car.pitting = false; this.event(car.lap, `${car.code} возвращается на трассу`, 'pit'); }
           continue;
         }
+        // под нейтралитетом ИИ берегут топливо
+        if (!car.isPlayer && car.fuelMode !== 'eco') car.fuelMode = 'eco';
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
         const target = rank === 0 ? Infinity : prevDist - gap;
-        let speed = (this.track.total / car.targetLap) * f * 0.5;
+        let speed = (this.track.total / car.targetLap) * f * 0.7; // −30% к темпу
         if (car.dist < target) {
           const need = target - car.dist;
           speed = Math.max(speed, Math.min(need / dt, crawlCap * f * catchMul));
@@ -2248,13 +2251,13 @@ function maybeSealDeal(gs: GameState, did: string) {
   pushNews(gs, `🤝 СДЕЛКА: ${gs.drivers[did].name} → ${playerTeam(gs).short} после финала сезона`, 'ТРАНСФЕРЫ');
 }
 
-export function startStaffNego(gs: GameState, sid: string, slotRole: Staff['role']): string | null {
+export function startStaffNego(gs: GameState, sid: string, slotIdx: number): string | null {
   const s = gs.staff[sid];
   if (!s) return 'Специалист не найден';
   if (s.teamId === gs.playerTeamId) return 'Он уже в вашей команде';
   if (gs.staffNegos[sid] || gs.staffDeals.some((x) => x.sid === sid)) return 'Переговоры уже ведутся';
   const ask = Math.round(s.skill * s.skill * 260 * (1.1 + rnd() * 0.3));
-  gs.staffNegos[sid] = { sid, askSalary: ask, offerSalary: ask, agreed: false, collapsed: false, slotRole };
+  gs.staffNegos[sid] = { sid, askSalary: ask, offerSalary: ask, agreed: false, collapsed: false, slotIdx };
   return null;
 }
 
@@ -2266,7 +2269,7 @@ export function offerToStaff(gs: GameState, sid: string): string {
   const p = clamp(0.45 + (ratio - 1) * 2.5, 0.08, 0.95);
   if (rnd() < p) {
     n.agreed = true;
-    gs.staffDeals.push({ sid, salary: n.offerSalary, slotRole: n.slotRole });
+    gs.staffDeals.push({ sid, salary: n.offerSalary, slotIdx: n.slotIdx });
     delete gs.staffNegos[sid];
     pushNews(gs, `🤝 ${s.name} (${ROLE_NAMES[s.role]}, ${s.skill}) перейдёт к вам после сезона`, 'КАДРЫ');
     return `${s.name} согласен: ${money(n.offerSalary)}/год. Переход — после финала`;
@@ -2589,8 +2592,7 @@ function applyPlayerDeals(gs: GameState, moves: string[]): string[] {
   for (const sd of gs.staffDeals) {
     const s = gs.staff[sd.sid];
     if (!s) continue;
-    const roles = staffRolesFor(pt.seriesId);
-    const idx = roles.indexOf(sd.slotRole);
+    const idx = sd.slotIdx;
     if (idx >= 0 && pt.staffIds[idx] && gs.staff[pt.staffIds[idx]]) gs.staff[pt.staffIds[idx]].teamId = null;
     if (idx >= 0) pt.staffIds[idx] = s.id;
     s.teamId = pt.id;
