@@ -39,6 +39,10 @@ export default function WeekendScreen({ onStartSession }: { onStartSession: (sta
                 {stageTitle(gs, st).split(' ')[0].toUpperCase()}
               </span>
             ))}
+            <button onClick={() => dispatch({ type: 'BACK_TO_HUB' })}
+              className="btn-tab !py-1.5 border border-[#2a3442] hover:border-[#5a6879] ml-2" title="Вернуться в штаб (уик-энд сохранится)">
+              <Icon name="back" size={13} />В штаб
+            </button>
           </div>
         </div>
       </header>
