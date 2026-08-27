@@ -1369,6 +1369,7 @@ export interface SimCar {
   letThrough: boolean; letThroughLaps: number;
   style: number;                        // индивидуальная агрессивность ИИ 0..1
   usedTires: string[];                  // составы, на которых машина ехала (для правила двух составов)
+  dsq: boolean;                         // дисквалифицирован (нарушение правила двух составов)
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1425,6 +1426,13 @@ export class RaceSim {
         plan.startTire = ov;
         if (plan.stints.length) plan.stints[0] = ov;
       }
+      // АБСОЛЮТНАЯ гарантия правила двух составов для ИИ (сухие гонки Ф1/Ф2):
+      // если в плане меньше двух разных составов — заменяем последний отрезок
+      if (!wetSession && kind === 'race' && (gs.playerSeries === 'f1' || gs.playerSeries === 'f2')
+          && t.id !== gs.playerTeamId && plan.stints.length >= 2 && new Set(plan.stints).size < 2) {
+        const other = dryCompounds(gs.playerSeries).find((cc) => cc.id !== plan.stints[0]);
+        if (other) plan.stints[plan.stints.length - 1] = other.id;
+      }
       const car: SimCar = {
         did, tid: t.id, code: d.code, name: d.name, color: t.color, color2: t.color2,
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
@@ -1443,6 +1451,7 @@ export class RaceSim {
         letThrough: false, letThroughLaps: 0,
         style,
         usedTires: [plan.startTire],
+        dsq: false,
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1903,6 +1912,21 @@ export class RaceSim {
       }
       return;
     }
+    // СТРАХОВКА правила двух составов (Ф1/Ф2, сухая гонка): если правило ещё не выполнено
+    // и планового пита нет — ИИ обязан заехать на другой состав до финиша (иначе ДСК)
+    const sidRule = this.gs.playerSeries;
+    if ((sidRule === 'f1' || sidRule === 'f2') && this.kind === 'race' && !this.raining && !this.wetSession) {
+      const dryUsed = car.usedTires.filter((x) => !['I', 'W', 'AW'].includes(x));
+      if (new Set(dryUsed).size < 2 && nextPlanned == null && car.lap < this.totalLaps - 2) {
+        const other = dryCompounds(sidRule).find((cc) => !dryUsed.includes(cc.id));
+        if (other) {
+          car.pitLaps.push(car.lap + 1);
+          car.pendingTire = other.id;
+          this.event(car.lap, `${car.code}: обязательный пит — правило двух составов`, 'pit');
+          return;
+        }
+      }
+    }
     // под машиной безопасности пит «почти бесплатный»
     if (this.phase === 'sc' || this.phase === 'vsc') {
       const sid = this.gs.playerSeries;
@@ -2072,6 +2096,7 @@ export class RaceSim {
 
   results(): SimCar[] {
     return [...this.cars].sort((a, b) => {
+      if (a.dsq !== b.dsq) return a.dsq ? 1 : -1; // дисквалифицированные — в конец
       if (a.finished && b.finished) return a.finishT - b.finishT;
       if (a.finished) return -1;
       if (b.finished) return 1;
@@ -2145,15 +2170,15 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
   const ss = gs.series[sid];
 
   // ПРАВИЛО ДВУХ СОСТАВОВ (Ф1/Ф2, только сухие гонки, не спринты):
-  // каждый финишировавший обязан использовать >=2 разных состава. Иначе — штраф +30 с.
+  // каждый финишировавший обязан использовать >=2 разных состава, иначе — ДИСКВАЛИФИКАЦИЯ.
   // Не действует, если по ходу гонки был дождь или машина использовала дождевые шины.
   const twoCompoundViolators: string[] = [];
   if (stage === 'race' && (sid === 'f1' || sid === 'f2') && !sim.wetSession && !sim.raining) {
     for (const car of sim.cars) {
-      if (car.status !== 'fin') continue;
+      if (car.status !== 'fin' || car.dsq) continue;
       const dryUsed = car.usedTires.filter((x) => x !== 'I' && x !== 'W' && x !== 'AW');
       if (new Set(dryUsed).size < 2) {
-        car.finishT += 30;
+        car.dsq = true;
         twoCompoundViolators.push(car.code);
       }
     }
@@ -2165,23 +2190,24 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
   const ptsArr = stage === 'sprint' ? meta.sprintPoints : stage === 'sprintRev' ? meta.revSprintPoints : meta.points;
   const indy500 = sid === 'indy' && sim.circuit.name.includes('Индианаполис 500');
   const rows: TableRow[] = results.map((car, i) => {
-    let pts = ptsArr[i] ?? 0;
-    if (indy500 && stage === 'race') pts *= 2;
+    let pts = car.dsq ? 0 : (ptsArr[i] ?? 0);
+    if (indy500 && stage === 'race' && !car.dsq) pts *= 2;
     ss.dStand[car.did] = (ss.dStand[car.did] ?? 0) + pts;
     ss.tStand[car.tid] = (ss.tStand[car.tid] ?? 0) + pts;
     const gap = car.finishT - winT;
-    const display = car.status === 'fin'
-      ? (i === 0 ? fmtLap(winT) : `+${gap.toFixed(3)}`)
-      : `+${sim.totalLaps - car.lap} круг(ов)`;
+    const display = car.dsq ? 'ДСК'
+      : car.status === 'fin'
+        ? (i === 0 ? fmtLap(winT) : `+${gap.toFixed(3)}`)
+        : `+${sim.totalLaps - car.lap} круг(ов)`;
     return {
       pos: i + 1, did: car.did, tid: car.tid, display,
       best: car.bestLap != null ? fmtLap(car.bestLap) : null,
       points: pts,
-      note: car.status === 'out' ? `Сход: ${car.outReason}` : '',
+      note: car.dsq ? 'Дисквалифицирован: правило двух составов' : car.status === 'out' ? `Сход: ${car.outReason}` : '',
     };
   });
   let fl: SimCar | null = null;
-  for (const car of results) if (car.status === 'fin' && car.pos <= 10) if (!fl || (car.bestLap ?? 1e9) < (fl.bestLap ?? 1e9)) fl = car;
+  for (const car of results) if (car.status === 'fin' && !car.dsq && car.pos <= 10) if (!fl || (car.bestLap ?? 1e9) < (fl.bestLap ?? 1e9)) fl = car;
   const notes: string[] = [];
   if (fl && meta.flPoints > 0 && stage === 'race') {
     ss.dStand[fl.did] += meta.flPoints;
@@ -2190,7 +2216,7 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
   }
   if (indy500 && stage === 'race') notes.push('Инди-500: двойные очки');
   if (twoCompoundViolators.length) {
-    notes.push(`⚠ Правило двух составов нарушено — штраф +30 с: ${twoCompoundViolators.join(', ')}`);
+    notes.push(`⛔ Дисквалификация за нарушение правила двух составов: ${twoCompoundViolators.join(', ')}`);
   }
   w.results[stage] = { stage, title: stageTitle(gs, stage), rows, notes };
   w.stageIdx++;

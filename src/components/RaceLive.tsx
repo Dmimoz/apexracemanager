@@ -174,6 +174,9 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
               const wear = Math.min(100, Math.round((car.wear / tire.life) * 100));
               const wearCol = wear > 85 ? '#ff6b4b' : wear > 60 ? '#ffc94d' : '#4ade80';
               const isPurple = car.lastLap != null && car.bestLap != null && car.lastLap <= car.bestLap + 0.001;
+              // правило двух составов: ДСК для финишировавшего с одним составом (сухая гонка Ф1/Ф2)
+              const ruleLive = stage === 'race' && (sid === 'f1' || sid === 'f2') && !sim.wetSession && !sim.raining;
+              const isDsq = car.dsq || (ruleLive && car.status === 'fin' && new Set(car.usedTires.filter((x) => !['I', 'W', 'AW'].includes(x))).size < 2);
               return (
                 <div key={car.did}
                   className={`flex items-center gap-2.5 px-3 py-[7px] border-l-[3px] text-[14px] transition-colors ${car.isPlayer ? 'bg-[#1a2230]' : 'hover:bg-[#141a23]'} ${isOut ? 'opacity-40' : ''}`}
@@ -191,6 +194,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
                     {isOut ? 'СХОД'
+                      : isDsq ? <span className="text-[#ff6b4b] font-bold" title="Дисквалифицирован: правило двух составов">ДСК</span>
                       : inPit ? <span className="text-[#ffc94d]">В БОКСАХ</span>
                       : car.status === 'fin'
                         ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
@@ -264,7 +268,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                             })}
                           </span>
                           <span className={`text-[10px] font-bold ${ok ? 'text-[#4ade80]' : 'text-[#ffc94d]'}`}>
-                            {ok ? '✓ выполнено' : '⚠ нужен ещё 1 состав'}
+                            {ok ? '✓ выполнено' : '⚠ нужен ещё 1 состав — иначе ДСК'}
                           </span>
                         </div>
                       );
