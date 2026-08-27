@@ -1506,12 +1506,15 @@ export class RaceSim {
       // если дистанция длинная. Последний отрезок гарантированно доезжает до финиша.
       const ladder = dryCompounds(sid);                      // мягкий → жёсткий
       const hard = ladder[ladder.length - 1].id;
-      // ресурс состава в кругах при текущем режиме и абразивности трассы (цель ~75% износа — до зоны проколов)
+      // ресурс состава в кругах: учитываем ВСЕ множители износа, которые действуют в гонке
+      // (режим, топливо, абразивность, уход команды за резиной, настройки), цель ~60% — большой запас до проколов
       const degF = 0.55 + c.deg * 0.65;
-      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.75 / (modeF * degF)));
+      const fuelF = 1.1;                                    // запас на push-режимы по ходу stint'а
+      const wearAll = modeF * fuelF * degF * tireCareFactor(this.gs, t.id);
+      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.6 / wearAll));
       // желаемое число питов по режиму; увеличиваем, если даже жёсткий состав не покроет дистанцию
       let stops = mode === 'aggr' ? 2 : 1;
-      while (Math.ceil(laps / (stops + 1)) > capOf(hard) && stops < 4) stops++;
+      while (Math.ceil(laps / (stops + 1)) > capOf(hard) && stops < 3) stops++;
       const n = Math.min(stops + 1, Math.max(1, laps));
       // длины отрезков: поровну, последний забирает остаток (он <= capOf(hard) по построению)
       const even = Math.max(1, Math.floor(laps / n));
@@ -1628,23 +1631,25 @@ export class RaceSim {
     const lead = this.leader();
 
     if (this.phase === 'sc' || this.phase === 'vsc') {
-      // Машина безопасности: темп на 30% ниже боевого, пелотон сбивается максимально плотно
-      const sorted = this.runningSorted();
+      // Машина безопасности: темп на 30% ниже боевого, пелотон сбивается максимально плотно.
+      // Машины в боксах НЕ участвуют в построении — они стоят и не сбивают позиции остальных.
       const gap = this.phase === 'sc' ? 12 : 45;   // дистанция между машинами, м
       const crawlCap = this.track.total / lead.targetLap;
       const catchMul = this.phase === 'sc' ? 0.97 : 0.75;
-      let prevDist = -1e9;
-      for (let rank = 0; rank < sorted.length; rank++) {
-        const car = sorted[rank];
+      // 1) машины в боксах: просто стоят и отсчитывают время пит-стопа
+      for (const car of this.cars) {
         if (car.status !== 'run') continue;
-        // машина в боксах (под SC) — стоит, не участвует в построении пелотона
-        if (car.pitCrawl > 0) {
+        if (car.pitCrawl > 0 || car.pitting) {
           car.pitCrawl -= dt;
-          if (car.pitCrawl <= 0) { car.pitting = false; this.event(car.lap, `${car.code} возвращается на трассу`, 'pit'); }
-          continue;
+          if (car.pitCrawl <= 0) this.leavePit(car);
         }
-        // под нейтралитетом ИИ берегут топливо
-        if (!car.isPlayer && car.fuelMode !== 'eco') car.fuelMode = 'eco';
+      }
+      // 2) пелотон на трассе: строится плотно за лидером (только машины НЕ в боксах)
+      const onTrack = this.runningSorted().filter((c) => c.pitCrawl <= 0 && !c.pitting);
+      let prevDist = -1e9;
+      for (let rank = 0; rank < onTrack.length; rank++) {
+        const car = onTrack[rank];
+        if (!car.isPlayer && car.fuelMode !== 'eco') car.fuelMode = 'eco'; // под SC берегут топливо
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
         const target = rank === 0 ? Infinity : prevDist - gap;
@@ -1663,12 +1668,9 @@ export class RaceSim {
       for (const car of this.cars) {
         if (car.status !== 'run' || this.phase === 'cheq') continue;
         // машина в боксах: стоит на месте, пока не отсчитается время пит-стопа
-        if (car.pitCrawl > 0) {
+        if (car.pitCrawl > 0 || car.pitting) {
           car.pitCrawl -= dt;
-          if (car.pitCrawl <= 0) {
-            car.pitting = false;
-            this.event(car.lap, `${car.code} возвращается на трассу`, 'pit');
-          }
+          if (car.pitCrawl <= 0) this.leavePit(car);
           continue;
         }
         const idx = this.pointIndex(car.dist);
@@ -1706,6 +1708,7 @@ export class RaceSim {
   }
 
   computeStandings() {
+    const inPit = (c: SimCar) => c.status === 'run' && (c.pitting || c.pitCrawl > 0);
     const sorted = [...this.cars].sort((a, b) => {
       if (a.status === 'fin' && b.status === 'fin') return a.finishT - b.finishT;
       if (a.status === 'fin') return -1;
@@ -1713,23 +1716,45 @@ export class RaceSim {
       if (a.status === 'out' && b.status === 'out') return b.dist - a.dist;
       if (a.status === 'out') return 1;
       if (b.status === 'out') return -1;
+      // машины в боксах — всегда позади машин на трассе
+      if (inPit(a) && !inPit(b)) return 1;
+      if (!inPit(a) && inPit(b)) return -1;
       return b.dist - a.dist;
     });
-    const lead = sorted.find((c) => c.status === 'run');
+    const lead = sorted.find((c) => c.status === 'run' && !inPit(c));
     const leaderSpeed = lead ? this.track.total / lead.targetLap : 60;
     const drsSeries = this.gs.playerSeries === 'f2' || this.gs.playerSeries === 'f3';
     sorted.forEach((car, i) => {
       car.pos = i + 1;
       if (lead && car.status === 'run') {
-        car.gap = car === lead ? 0 : Math.max(0, (lead.dist - car.dist) / leaderSpeed);
-        const ahead = sorted[i - 1];
-        car.interval = ahead && ahead.status === 'run' ? Math.max(0, (ahead.dist - car.dist) / leaderSpeed) : car.gap;
+        if (inPit(car)) {
+          // машина в боксах: отставание = текущее время простоя (реалистично, без аномалий)
+          car.gap = Math.max(0, (lead.dist - car.dist) / leaderSpeed);
+          car.interval = car.gap;
+        } else {
+          car.gap = car === lead ? 0 : Math.max(0, (lead.dist - car.dist) / leaderSpeed);
+          const ahead = sorted[i - 1];
+          car.interval = ahead && ahead.status === 'run' && !inPit(ahead) ? Math.max(0, (ahead.dist - car.dist) / leaderSpeed) : car.gap;
+        }
+        // защита от аномально больших отставаний (не более 2 кругов)
+        const maxGap = (this.track.total * 2) / leaderSpeed;
+        car.gap = Math.min(car.gap, maxGap);
+        car.interval = Math.min(car.interval, maxGap);
         // DRS: только Ф2/Ф3, со 2-го круга, при отставании менее секунды, только по сухому
-        car.drs = drsSeries && !this.raining && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
+        car.drs = drsSeries && !this.raining && !inPit(car) && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
       } else {
         car.drs = false;
       }
     });
+  }
+
+  /** Выезд из боксов: машина возвращается на трассу и продолжает со своей дистанции.
+   *  Отставание накоплено естественно (пока стояла — пелотон уехал), аномалии ограничены в computeStandings. */
+  leavePit(car: SimCar) {
+    car.pitting = false;
+    car.pitCrawl = 0;
+    car.targetLap = this.lapEstimate(car);
+    this.event(car.lap, `${car.code} возвращается на трассу`, 'pit');
   }
 
   /** Начало пит-стопа: машина заезжает в боксы, шины меняются сразу, затем она стоит pitCrawl секунд */

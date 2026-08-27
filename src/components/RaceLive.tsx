@@ -170,6 +170,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
               const team = gs.teams[car.tid];
               const tire = compoundDef(sid, car.tire);
               const isOut = car.status === 'out';
+              const inPit = car.status === 'run' && (car.pitting || car.pitCrawl > 0);
               const wear = Math.min(100, Math.round((car.wear / tire.life) * 100));
               const wearCol = wear > 85 ? '#ff6b4b' : wear > 60 ? '#ffc94d' : '#4ade80';
               const isPurple = car.lastLap != null && car.bestLap != null && car.lastLap <= car.bestLap + 0.001;
@@ -190,6 +191,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
                     {isOut ? 'СХОД'
+                      : inPit ? <span className="text-[#ffc94d]">В БОКСАХ</span>
                       : car.status === 'fin'
                         ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
                         : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}

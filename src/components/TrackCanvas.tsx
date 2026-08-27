@@ -169,6 +169,8 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
           if (car.status === 'out') continue;
           // сессионные машины: рисуем только те, что на трассе (остальные в боксах)
           if ('state' in car && car.state !== 'flying') continue;
+          // гоночные машины в боксах — не на трассе
+          if ('pitting' in car && 'pitCrawl' in car && (car.pitting || car.pitCrawl > 0)) continue;
           const { x, y, a } = posAt(track, car.dist);
           const X = tf(x), Y = tfy(y);
           const leader = car.pos === 1 && car.status === 'run';
