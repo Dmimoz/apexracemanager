@@ -26,8 +26,9 @@ const SETUP_FIELDS: { f: keyof Setup; label: string }[] = [
   { f: 'diff', label: 'Дифференциал' },
 ];
 
-export default function SessionLive({ stage, onDone, onAbort }: {
+export default function SessionLive({ stage, startTires, onDone, onAbort }: {
   stage: Stage;
+  startTires?: Record<string, string>;
   onDone: () => void;
   onAbort: () => void;
 }) {
@@ -38,7 +39,7 @@ export default function SessionLive({ stage, onDone, onAbort }: {
   const circuit = circuitOfRound(gs, sid, w.roundIdx);
   const kind = stageToSimKind(stage);
   const grid = sessionGridFor(gs, stage);
-  const [sim] = useState<SessionSim>(() => makeSessionSim(gs, kind, grid, circuit, w.weather[stage] === 'wet'));
+  const [sim] = useState<SessionSim>(() => makeSessionSim(gs, kind, grid, circuit, w.weather[stage] === 'wet', startTires));
   const [started, setStarted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const speedRef = useRef(speed);

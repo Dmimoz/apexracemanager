@@ -590,6 +590,7 @@ export function beginWeekend(gs: GameState) {
   gs.weekend = w;
   gs.phase = 'weekend';
   if (sid === 'f1') aiFitComponents(gs, w);
+  announceUpdates(gs); // анонс: что команды привезли на этот уик-энд
 }
 
 export function currentStage(gs: GameState): Stage | null {
@@ -2167,13 +2168,16 @@ export function startNego(gs: GameState, did: string): string | null {
   const askSalary = Math.round(Math.max(d.salary, d.value * 0.08) * (1.1 + rnd() * 0.4));
   const askBonus = Math.round(d.value * (0.06 + rnd() * 0.09));
   const fromTeam = d.teamId ? gs.teams[d.teamId] : null;
-  // отступные: рыночная цена × контрактный множитель (экспонента) × нежелание сильной команды
+  // отступные = выкуп оставшихся зарплат (зарплата × лет) + премия от рыночной цены;
+  // чем выше зарплата и длиннее остаток контракта — тем дороже
   let feeAsk = 0;
   if (fromTeam) {
-    const contractMult = 1 + (Math.max(0, d.contract) - 1) * 0.55;   // длинный контракт = дорого
-    const strengthMult = 0.85 + fromTeam.reputation / 250;            // топ-команды заламывают цену
-    const starMult = d.pace > 86 ? 1 + (d.pace - 86) * 0.04 : 1;      // звёзды дороже
-    feeAsk = Math.round(d.value * (0.4 + rnd() * 0.25) * contractMult * strengthMult * starMult);
+    const yearsLeft = Math.max(1, d.contract);
+    const salaryPart = d.salary * yearsLeft * (1.35 + rnd() * 0.35);  // 135–170% от оставшихся зарплат
+    const valuePart = d.value * (0.22 + rnd() * 0.16);                // премия за рыночную ценность
+    const strengthMult = 0.9 + fromTeam.reputation / 300;             // топ-команды заламывают цену
+    const starMult = d.pace > 86 ? 1 + (d.pace - 86) * 0.035 : 1;     // звёзды дороже
+    feeAsk = Math.round((salaryPart + valuePart) * strengthMult * starMult);
   }
   gs.negos[did] = {
     did, interest, askSalary, askBonus, askYears: 1 + Math.floor(rnd() * 2),

@@ -73,8 +73,29 @@ export function WeatherTag({ w }: { w: WeatherKind }) {
   return <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: m.c }}>{m.t}</span>;
 }
 
+/** ISO 3166-1 alpha-3 → alpha-2, чтобы собрать флаг из региональных индикаторов */
+const ISO3: Record<string, string> = {
+  AUS: 'AU', AUT: 'AT', ARG: 'AR', BEL: 'BE', BRA: 'BR', BUL: 'BG', CAN: 'CA', CHN: 'CN',
+  COL: 'CO', CZE: 'CZ', DEN: 'DK', EST: 'EE', FIN: 'FI', FRA: 'FR', GBR: 'GB', GER: 'DE',
+  HUN: 'HU', IND: 'IN', IRL: 'IE', ITA: 'IT', JPN: 'JP', KOR: 'KR', LAT: 'LV', MEX: 'MX',
+  MON: 'MC', NED: 'NL', NOR: 'NO', NZL: 'NZ', PAR: 'PY', POL: 'PL', POR: 'PT', RSA: 'ZA',
+  SIN: 'SG', ESP: 'ES', SWE: 'SE', SUI: 'CH', THA: 'TH', USA: 'US', BAR: 'BB', CHL: 'CL',
+  CRC: 'CR', ECU: 'EC', ISR: 'IL', LUX: 'LU', MYS: 'MY', KSA: 'SA', QAT: 'QA', UAE: 'AE',
+  GRE: 'GR', ROU: 'RO', SVK: 'SK', SLO: 'SI', UKR: 'UA', CRO: 'HR', SRB: 'RS', LTU: 'LT',
+  KAZ: 'KZ', GEO: 'GE', ARM: 'AM', AZE: 'AZ', TUR: 'TR', INA: 'ID', MAR: 'MA', RUS: 'RU',
+  VEN: 'VE', ZWE: 'ZW', URU: 'UY', ISL: 'IS',
+};
+
+export function natFlag(nat: string): string {
+  const iso2 = ISO3[nat] ?? nat;
+  if (iso2.length !== 2) return '';
+  return String.fromCodePoint(...[...iso2.toUpperCase()].map((c) => 0x1f1e6 - 65 + c.charCodeAt(0)));
+}
+
 export function FlagTag({ nat }: { nat: string }) {
-  return <span className="font-disp text-[9px] font-bold tracking-wider text-[#8b99ac] border border-[#2a3442] px-1 py-px bg-[#11161d]">{nat}</span>;
+  const flag = natFlag(nat);
+  if (!flag) return <span className="font-disp text-[9px] font-bold tracking-wider text-[#8b99ac] border border-[#2a3442] px-1 py-px bg-[#11161d]">{nat}</span>;
+  return <span title={nat} className="text-[11px] leading-none">{flag}</span>;
 }
 
 export function Icon({ name, size = 16 }: { name: string; size?: number }) {

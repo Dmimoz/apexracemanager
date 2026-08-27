@@ -195,7 +195,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                 const burn = car.fuelMode === 'push' ? 1.55 : car.fuelMode === 'eco' ? 1.15 : 1.35;
                 const fuelLeft = car.fuel - lapsLeft * burn;
                 const fuelOk = fuelLeft >= 0;
-                const fuelPct = Math.min(100, Math.max(0, (car.fuel / (sim.totalLaps * 1.35)) * 100));
+                const fuelPct = Math.min(100, Math.max(0, (car.fuel / (sim.totalLaps * 1.575)) * 100));
                 return (
                   <div key={car.did} className="border border-[#2a3442] bg-[#10151d] px-3 py-2">
                     <div className="flex items-center gap-2 flex-wrap mb-1.5">

@@ -39,7 +39,8 @@ function Shell() {
     return (
       <SessionLive
         stage={live.stage}
-        onDone={() => setLive(null)}
+        startTires={startTires}
+        onDone={() => { setLive(null); setStartTires({}); }}
         onAbort={() => setLive(null)}
       />
     );
@@ -51,6 +52,8 @@ function Shell() {
         onStartSession={(stage) => {
           setLive({ kind: isRaceLikeStage(stage) ? 'race' : 'session', stage });
         }}
+        startTires={startTires}
+        setStartTires={setStartTires}
       />
     );
   }
