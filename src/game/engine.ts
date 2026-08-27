@@ -1586,32 +1586,71 @@ export class RaceSim {
       return { mode, fuelMode, setup, legs, startTire: legs[0].tire };
     }
 
-    // Ф1, Ф2, Индикара-роуд: жадный план (лимит питов — щедрый, фактическое число минимально)
-    let legs = this.buildLegs(dry, start, laps, wearRate, 3);
+    // Ф1, Ф2, Индикара-роуд: жадный план (фактическое число питов — минимально необходимое)
+    let legs = this.mergeLegs(this.buildLegs(dry, start, laps, wearRate, 3));
 
-    // ПРАВИЛО ДВУХ СОСТАВОВ (сухие гонки Ф1/Ф2): гарантируем >=2 разных состава.
-    // Если план свёлся к одному составу — раскалываем самый длинный отрезок короткой
-    // вставкой другого состава (каждый подотрезок остаётся в пределах своего ресурса).
+    // ПРАВИЛО ДВУХ СОСТАВОВ (сухие гонки Ф1/Ф2): гарантируем >=2 разных состава,
+    // добавляя МИНИМАЛЬНО возможное число пит-стопов (а не расковыривая план).
     if ((sid === 'f1' || sid === 'f2') && this.kind === 'race') {
       let guard = 0;
-      while (new Set(legs.map((l) => l.tire)).size < 2 && guard < 3) {
+      while (new Set(legs.map((l) => l.tire)).size < 2 && guard < 4) {
         guard++;
-        let idx = 0, bestLen = -1;
-        legs.forEach((l, i) => { const len = l.endLap - l.startLap; if (len > bestLen) { bestLen = len; idx = i; } });
-        const leg = legs[idx];
-        const other = dry.find((c) => c.id !== leg.tire && this.finishLimit(c.id, wearRate) >= 5);
-        if (!other) break;
-        const len = leg.endLap - leg.startLap;
-        const firstLen = Math.max(3, Math.floor(len / 2));
-        const otherLen = Math.min(this.finishLimit(other.id, wearRate), len - firstLen - 3);
-        if (otherLen < 3 || firstLen + otherLen >= len) break;
-        const a: TireLeg = { tire: leg.tire, startLap: leg.startLap, endLap: leg.startLap + firstLen, isFinish: false };
-        const b: TireLeg = { tire: other.id, startLap: a.endLap, endLap: a.endLap + otherLen, isFinish: false };
-        const c2: TireLeg = { tire: leg.tire, startLap: b.endLap, endLap: leg.endLap, isFinish: leg.isFinish };
-        legs.splice(idx, 1, a, b, c2);
+        if (legs.length === 1) {
+          // один отрезок — вставляем ровно один пит, разбивая дистанцию на два разных состава
+          const leg = legs[0];
+          const len = leg.endLap - leg.startLap;
+          // перебираем стартовый состав (сначала исходный) и второй состав
+          const t1order = [leg.tire, ...dry.map((c) => c.id).filter((id) => id !== leg.tire)];
+          let done = false;
+          for (const t1 of t1order) {
+            if (done) break;
+            for (const c of dry) {
+              if (c.id === t1 || done) continue;
+              const maxX = this.finishLimit(t1, wearRate);             // t1 выдержит 1-й отрезок
+              const minX = len - this.finishLimit(c.id, wearRate);     // t2 должен покрыть остаток
+              if (maxX >= 3 && minX < maxX) {
+                const X = leg.startLap + clamp(Math.max(3, Math.round(len * 0.5)), Math.max(3, minX), maxX);
+                legs = [
+                  { tire: t1, startLap: leg.startLap, endLap: X, isFinish: false },
+                  { tire: c.id, startLap: X, endLap: leg.endLap, isFinish: true },
+                ];
+                done = true;
+              }
+            }
+          }
+          if (!done) break; // физически невозможно — оставляем (риск ДСК)
+        } else {
+          // несколько отрезков одного состава — заменяем ОДИН (самый короткий) на другой состав
+          const order = legs.map((_, i) => i).sort((a, b) =>
+            (legs[a].endLap - legs[a].startLap) - (legs[b].endLap - legs[b].startLap));
+          let replaced = false;
+          for (const i of order) {
+            if (replaced) break;
+            const leg = legs[i];
+            const len = leg.endLap - leg.startLap;
+            for (const c of dry) {
+              if (c.id === leg.tire) continue;
+              const lim = leg.isFinish ? this.finishLimit(c.id, wearRate) : this.safeLife(c.id, wearRate);
+              if (lim >= len) { legs[i] = { ...leg, tire: c.id }; replaced = true; break; }
+            }
+          }
+          if (!replaced) break;
+        }
+        legs = this.mergeLegs(legs);
       }
     }
     return { mode, fuelMode, setup, legs, startTire: legs[0].tire };
+  }
+
+  /** Слить соседние отрезки одного состава (убирает бессмысленные питы между ними). */
+  mergeLegs(legs: TireLeg[]): TireLeg[] {
+    const out: TireLeg[] = [];
+    for (const l of legs) {
+      const prev = out[out.length - 1];
+      if (prev && prev.tire === l.tire) { prev.endLap = l.endLap; prev.isFinish = l.isFinish; }
+      else out.push({ ...l });
+    }
+    return out;
   }
 
   // (старый makePlan удалён — вся логика стратегий теперь в buildStrategy/buildLegs)
