@@ -1927,11 +1927,13 @@ export class RaceSim {
     this.event(car.lap, `${car.code} возвращается на трассу`, 'pit');
   }
 
-  /** Круг ближайшего пита (если есть): pendingPitLap (игрок/событие) имеет приоритет над планом. */
+  /** Круг ближайшего пита (если есть): pendingPitLap (игрок/событие) имеет приоритет над планом.
+   *  ВАЖНО: >= (не >) — триггер в cross() проверяется ПОСЛЕ инкремента круга, поэтому
+   *  круг пита всегда равен car.lap в момент срабатывания. */
   nextPitLap(car: SimCar): number | null {
-    if (car.pendingPitLap != null && car.pendingPitLap > car.lap) return car.pendingPitLap;
+    if (car.pendingPitLap != null && car.pendingPitLap >= car.lap) return car.pendingPitLap;
     const leg = car.legs[car.legIdx];
-    if (leg && !leg.isFinish && leg.endLap > car.lap) return leg.endLap;
+    if (leg && !leg.isFinish && leg.endLap >= car.lap) return leg.endLap;
     return null;
   }
 
@@ -2061,23 +2063,19 @@ export class RaceSim {
       return;
     }
 
-    // ПОД МАШИНОЙ БЕЗОПАСНОСТИ: пит вдвое дешевле, поэтому ИИ переносит заезд на это окно.
-    // Логика как в реальности: пит под SC выгоден, если резина уже поработала
-    // ИЛИ плановое окно пита наступает в ближайшие 10 кругах (всё равно пришлось бы ехать).
+    // ПОД МАШИНОЙ БЕЗОПАСНОСТИ: единственный «бесплатный» пит (перенос дальнего планового)
     if ((this.phase === 'sc' || this.phase === 'vsc') && !car.scPitUsed) {
-      const notImminent = nextPlanned == null || nextPlanned - car.lap > 2; // заезд и так через 1-2 круга — не мешаем
-      if (notImminent) {
+      const farOrNone = nextPlanned == null || nextPlanned - car.lap > 3;
+      if (farOrNone) {
         const sid = this.gs.playerSeries;
         const dry = dryCompounds(sid);
         const soft = dry[0].id;
         const scTire = car.usedTires.includes(soft) ? (dry.find((x) => x.id !== soft)?.id ?? soft) : soft;
-        const plannedClose = nextPlanned != null && nextPlanned - car.lap <= 10;
-        const worthIt = wear > 0.3 || plannedClose;
         if (sid === 'f2') {
           // Ф2: пит под SC со свежим комплектом; вне топ-10 рискуют даже уже питавшиеся
           const eligible = car.pitCount === 0
-            ? (worthIt && car.lap < this.totalLaps - 6 && rnd() < 0.85)
-            : (car.pos > 10 && (wear > 0.35 || plannedClose) && lapsLeft > 8 && rnd() < 0.6);
+            ? (wear > 0.2 && car.lap < this.totalLaps - 6 && rnd() < 0.8)
+            : (car.pos > 10 && wear > 0.4 && lapsLeft > 10 && rnd() < 0.6);
           if (eligible) {
             car.pendingPitLap = car.lap + 1;
             car.pendingTire = scTire;
@@ -2087,12 +2085,12 @@ export class RaceSim {
           }
           return; // Ф2 в топ-10 уже питавшийся — остаётся, бережёт позицию
         }
-        // другие серии: переносим плановый стоп на бесплатное окно SC
-        if (worthIt && car.lap < this.totalLaps - 4 && rnd() < 0.85) {
+        // другие серии: переносим плановый стоп под SC, если резина уже поработала
+        if (wear > 0.5 && car.lap < this.totalLaps - 4) {
           car.pendingPitLap = car.lap + 1;
           car.pendingTire = null;
           car.scPitUsed = true;
-          this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит (−50% времени)`, 'pit');
+          this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
           return;
         }
       }
