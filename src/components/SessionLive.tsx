@@ -128,6 +128,17 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#0a0c10]">
+      {/* Подтверждение завершения: все машины доездили последние круги */}
+      {sim.awaitingConfirm && (
+        <div className="shrink-0 flex items-center justify-center gap-4 px-4 py-2.5 bg-[#141a10] border-b border-[#d8f22466] reveal">
+          <span className="font-disp text-[12px] font-bold tracking-[0.12em] text-[#d8f224]">
+            🏁 ВСЕ МАШИНЫ ЗАВЕРШИЛИ ПОСЛЕДНИЕ КРУГИ
+          </span>
+          <Btn variant="acc" className="!py-1.5" onClick={() => { simRef.current.finishSession(); finish(); }}>
+            <Icon name="check" size={13} />ЗАВЕРШИТЬ СЕССИЮ
+          </Btn>
+        </div>
+      )}
       {/* ШАПКА */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-[#252e3b] bg-[#0d1117] shrink-0">
         <div className="flex items-center gap-3 min-w-0">
@@ -148,7 +159,13 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
               ×{m}
             </button>
           ))}
-          <Btn className="!py-1 !px-3 ml-2" onClick={() => { simRef.current.fastForward(); finish(); }} title="Досимулировать сессию до конца">
+          <Btn className="!py-1 !px-3 ml-2"
+            onClick={() => {
+              const s = simRef.current;
+              s.fastForward();
+              if (s.awaitingConfirm) s.finishSession();
+              if (s.done) finish();
+            }} title="Досимулировать сессию до конца">
             <Icon name="flag" size={13} />ЗАВЕРШИТЬ
           </Btn>
         </div>
@@ -174,6 +191,7 @@ export default function SessionLive({ stage, startTires, onDone, onAbort }: {
                   <span className="w-2.5 h-2.5 rounded-full border-2 shrink-0" style={{ borderColor: cd.color, background: `${cd.color}33` }} />
                   <span className="font-bold w-9">{car.code}</span>
                   <span className="num text-[#e7edf4] flex-1 text-right">{gap}</span>
+                  {car.flagged && <span title="Финишировал (доехал последний круг)" className="text-[10px]">🏁</span>}
                   <span className={`font-disp text-[8px] font-bold w-11 text-right ${car.state === 'flying' ? 'text-[#4ade80]' : car.state === 'elim' ? 'text-[#ff6b4b]' : 'text-[#5a6a80]'}`}>{state}</span>
                 </div>
               );

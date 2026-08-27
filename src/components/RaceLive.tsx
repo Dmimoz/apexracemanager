@@ -97,6 +97,8 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   const cars = [...sim.cars].sort((a, b) => a.pos - b.pos);
   const leader = cars.find((c) => c.pos === 1);
   const playerCars = cars.filter((c) => c.isPlayer);
+  const finCars = cars.filter((c) => c.status === 'fin');
+  const winnerT = finCars.length ? Math.min(...finCars.map((c) => c.finishT)) : 0;
   const slicks = SERIES_META[sid].compounds.filter((c) => !['I', 'W'].includes(c.id));
   const wetTires = SERIES_META[sid].compounds.filter((c) => ['I', 'W', 'AW'].includes(c.id));
 
@@ -137,7 +139,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
 
       <div className="flex flex-1 min-h-0">
         {/* ЛЕВО: крупная таблица отрывов */}
-        <aside className="w-[46%] shrink-0 border-r border-[#252e3b] bg-[#0d1117] flex flex-col min-h-0">
+        <aside className="w-[40%] shrink-0 border-r border-[#252e3b] bg-[#0d1117] flex flex-col min-h-0">
           <div className="px-3 py-2 border-b border-[#1d242f] flex items-center justify-between shrink-0">
             <span className="text-[10px] uppercase tracking-[0.2em] text-[#7f8da0] font-semibold">Тайминг · отрывы</span>
             <span className="text-[9px] text-[#5a6a80]">отрыв | посл. круг</span>
@@ -166,7 +168,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
-                    {isOut ? 'СХОД' : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
+                    {isOut ? 'СХОД'
+                      : car.status === 'fin'
+                        ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
+                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
                   </span>
                   <span className={`num w-[86px] text-right text-[13px] ${isPurple ? 'text-[#c884ff] font-bold' : 'text-[#7f8da0]'}`}>
                     {car.lastLap != null ? fmtLap(car.lastLap) : '—'}

@@ -4,7 +4,7 @@ import { SERIES_META } from '../game/data';
 import type { Setup, Stage } from '../game/types';
 import {
   availableRookies, circuitOfRound, compoundDef, driverSetup, dryCompounds, engineerSetupAdvice,
-  playerTeam, raceDriversOfTeam, stageTitle,
+  playerTeam, raceDriversOfTeam, raceLapsFor, stageTitle,
 } from '../game/engine';
 import { Btn, FlagTag, Icon, Panel, ResultTable, WeatherTag } from './ui';
 
@@ -42,8 +42,8 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
   const [briefing] = useState(() => engineerSetupAdvice(gs, circuit));
   const showBriefing = w.stageIdx === 0 && isPractice;
 
-  // в штабе уик-энда настройки доступны всегда; парк-ферме наступает с началом квалификации (в трансляции)
-  const setupLocked = false;
+  // парк-ферме: с начала квалификации и до конца уик-энда настройки менять нельзя
+  const setupLocked = isQuali || pastStages.some((s) => s === 'quali' || s === 'sq');
 
   return (
     <div className="min-h-screen pb-16">

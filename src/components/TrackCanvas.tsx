@@ -93,7 +93,7 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
       for (let x = 0; x < W; x += 36) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
       for (let y = 0; y < H; y += 36) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-      const sc = Math.min(W / 1080, H / 700);
+      const sc = Math.min(W / 1000, H / 640); // плотнее к краям — трасса крупнее
       const ox = (W - 1000 * sc) / 2, oy = (H - 620 * sc) / 2;
       const tf = (x: number) => ox + x * sc;
       const tfy = (y: number) => oy + y * sc;
@@ -184,20 +184,20 @@ export default function TrackCanvas({ sim, track, seriesColor, phase, raining }:
           ctx.save();
           ctx.translate(X, Y);
           ctx.rotate(a);
-          const L = (car.isPlayer ? 13 : 11) * sc;
-          if (leader) { ctx.shadowColor = seriesColor; ctx.shadowBlur = 14 + pulse * 6; }
-          else if (car.isPlayer) { ctx.shadowColor = '#d8f224'; ctx.shadowBlur = 10; }
+          const L = (car.isPlayer ? 17 : 14) * sc; // болиды заметнее
+          if (leader) { ctx.shadowColor = seriesColor; ctx.shadowBlur = 16 + pulse * 7; }
+          else if (car.isPlayer) { ctx.shadowColor = '#d8f224'; ctx.shadowBlur = 12; }
           drawCarTop(ctx, L, car.color, car.status === 'fin');
           ctx.restore();
           if (leader || car.isPlayer) {
-            ctx.font = `700 ${Math.max(9, 10 * sc)}px Orbitron, sans-serif`;
+            ctx.font = `700 ${Math.max(10, 12 * sc)}px Orbitron, sans-serif`;
             ctx.fillStyle = leader ? '#ffd75c' : '#d8f224';
-            ctx.fillText(car.code, X + 10 * sc, Y - 8 * sc);
+            ctx.fillText(car.code, X + 12 * sc, Y - 10 * sc);
           }
           if (car.pitting) {
-            ctx.font = `700 ${Math.max(8, 9 * sc)}px Orbitron, sans-serif`;
+            ctx.font = `700 ${Math.max(9, 10 * sc)}px Orbitron, sans-serif`;
             ctx.fillStyle = '#ffc94d';
-            ctx.fillText('PIT', X + 10 * sc, Y + 14 * sc);
+            ctx.fillText('PIT', X + 12 * sc, Y + 16 * sc);
           }
         }
       }

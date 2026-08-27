@@ -170,13 +170,20 @@ export const TEAMS: Team[] = [
 /* ================= ПИЛОТЫ 2026 ================= */
 
 let drvN = 0;
-function D(id: string, name: string, code: string, nat: string, age: number, pace: number,
+/** Трёхбуквенный код пилота — первые 3 буквы фамилии */
+export function surnameCode(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  const last = parts[parts.length - 1] ?? name;
+  return last.replace(/[^A-Za-zА-Яа-яЁё]/g, '').slice(0, 3).toUpperCase();
+}
+
+function D(id: string, name: string, _code: string, nat: string, age: number, pace: number,
   race: number, cons: number, wet: number, teamId: string, sid: SeriesId,
   salary: number, contract: number, f1Starts?: number, reserve?: boolean): Driver {
   drvN++;
   const starts = sid === 'f1' ? (f1Starts ?? 0) : 0;
   return {
-    id, name, code, nat, age, pace, racecraft: race, consistency: cons, wet,
+    id, name, code: surnameCode(name), nat, age, pace, racecraft: race, consistency: cons, wet,
     form: 70 + ((pace + cons) % 11), teamId, seriesId: sid,
     f1Starts: starts, gpStarts: starts,
     value: Math.round(pace * pace * 550), salary, contract, reserve,

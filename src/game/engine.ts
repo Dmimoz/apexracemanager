@@ -1,7 +1,7 @@
 import {
   ALL_CIRCUITS, CALENDARS, DRIVERS, JUNIOR_FIRST, JUNIOR_LAST, REG_EVENTS, RESERVES,
   ROLE_NAMES, SERIES_META, SERIES_ORDER, TEAMS, TRACK_OUTLINES, TRACK_SVGS, TRACK_SVGS_REVERSED,
-  makeStaff, staffRolesFor,
+  makeStaff, staffRolesFor, surnameCode,
 } from './data';
 import type {
   Circuit, Driver, GameState, Round, SeriesId, SeriesState, SessionResult,
@@ -523,7 +523,7 @@ export function genJuniors(gs: GameState, count: number): Driver[] {
     const pace = 52 + Math.round(rnd() * 14);
     const d: Driver = {
       id: `jun_${gs.seasonN}_${juniorN}`, name,
-      code: (fn[0] + ln.slice(0, 2)).toUpperCase(),
+      code: surnameCode(name),
       nat: '—', age: 16 + Math.floor(rnd() * 3),
       pace, racecraft: 48 + Math.round(rnd() * 14), consistency: 48 + Math.round(rnd() * 16),
       wet: 48 + Math.round(rnd() * 14), form: 70,
@@ -849,6 +849,7 @@ export interface SessionCar {
   program: SessionProgram | null;  // выбранная программа работы
   stayBoxed: boolean;              // стоит в боксах, пока игрок не выпустит
   tireFlip: boolean;               // для теста шин: чередуем составы
+  flagged: boolean;                // доехал последний круг после истечения времени (🏁 в таблице)
 }
 
 interface Segment { name: string; simClock: number; realMin: number; cutoff: number }
@@ -887,6 +888,8 @@ export class SessionSim {
   segIdx = 0;
   segment: string;
   done = false;
+  clockExpired = false;      // время сегмента истекло — машины доезжают начатые круги
+  awaitingConfirm = false;   // все круги доезжены — ждём подтверждения игрока
   events: { lap: number; text: string; kind: string }[] = [];
   playerSetup: Setup;
 
@@ -927,6 +930,7 @@ export class SessionSim {
         setup,
         program: isPlayer && kind === 'practice' ? 'race' : null,
         stayBoxed: isPlayer, tireFlip: false,   // машины игрока ждут в боксах, выезд — вручную
+        flagged: false,
       });
       const car = this.cars[this.cars.length - 1];
       car.runLen = this.planRunLen(car);
@@ -982,15 +986,22 @@ export class SessionSim {
   }
 
   tick(dt: number) {
-    if (this.done) return;
+    if (this.done || this.awaitingConfirm) return;
     this.t += dt;
-    this.clock -= dt;
-    if (this.clock <= 0) { this.endSegment(); if (this.done) return; }
+    if (!this.clockExpired) {
+      this.clock -= dt;
+      if (this.clock <= 0) {
+        this.clock = 0;
+        this.clockExpired = true;
+        this.event(0, '⏱ Время истекло — машины доезжают начатые круги, новых выездов нет');
+      }
+    }
     const seg0 = this.segments[this.segIdx].simClock;
     for (const car of this.cars) {
       if (car.state === 'elim' || car.state === 'done') { car.status = 'park'; continue; }
       if (car.state === 'garage') {
         car.status = 'park';
+        if (this.clockExpired) continue; // после истечения времени новых выездов нет
         // машины игрока выезжают ТОЛЬКО по его команде; ИИ — по своему таймеру
         const mayExit = car.manual ? car.playerOut : this.t >= car.exitAt;
         if (mayExit && this.clock > seg0 * 0.05) {
@@ -1016,6 +1027,20 @@ export class SessionSim {
     }
     const onTrack = this.cars.filter((c) => c.state === 'flying').sort((a, b) => b.dist - a.dist);
     onTrack.forEach((c, i) => { c.pos = i + 1; });
+
+    // время истекло: когда все машины доехали и вернулись в боксы —
+    // либо переходим в следующий сегмент (квал), либо ждём подтверждения игрока
+    if (this.clockExpired) {
+      const flying = this.cars.some((c) => c.state === 'flying');
+      if (!flying) {
+        if (this.segIdx < this.segments.length - 1) {
+          this.advanceSegment();
+        } else {
+          this.awaitingConfirm = true;
+          this.event(0, '🏁 Все машины в боксах — подтвердите завершение сессии');
+        }
+      }
+    }
   }
 
   pointIndex(dist: number): number {
@@ -1032,16 +1057,26 @@ export class SessionSim {
     car.lapStartT = this.t;
     if (car.phase2 === 'out') {
       lapTime += 4 + rnd() * 2;
-      car.phase2 = 'push';
+      car.phase2 = this.clockExpired ? 'in' : 'push'; // после времени — сразу в боксы
       car.pushed = 0;
     } else if (car.phase2 === 'push') {
       this.recordLap(car, lapTime);
       car.pushed++;
       car.tireAge++;
       car.wear += this.wearPerLap(car);
-      if (car.pushed >= car.runLen || car.boxNext) car.phase2 = 'in';
+      if (car.pushed >= car.runLen || car.boxNext || this.clockExpired) car.phase2 = 'in';
     } else {
       lapTime += 5 + rnd() * 2;
+      if (this.clockExpired) {
+        // доехал последний круг после истечения времени — сессия для него закончена
+        car.state = 'done';
+        car.status = 'park';
+        car.flagged = true;
+        car.boxNext = false;
+        car.playerOut = false;
+        if (car.manual && this.kind === 'practice') { car.advice = this.makeAdvice(car); this.event(0, car.advice); }
+        return;
+      }
       car.state = 'garage';
       car.status = 'park';
       const dwell = this.kind === 'practice' ? 30 + rnd() * 50 : 20 + rnd() * 40;
@@ -1131,9 +1166,9 @@ export class SessionSim {
     });
   }
 
-  endSegment() {
+  /** Завершить сегмент (отсев в квал) и перейти к следующему. Вызывается, когда все доездили. */
+  advanceSegment() {
     const seg = this.segments[this.segIdx];
-    for (const car of this.cars) if (car.state === 'flying') { car.state = 'garage'; car.status = 'park'; }
     if (seg.cutoff > 0) {
       const ranked = this.ranked().filter((c) => c.state !== 'elim');
       const out = ranked.slice(ranked.length - seg.cutoff);
@@ -1143,16 +1178,13 @@ export class SessionSim {
       this.event(0, `${seg.name} завершён`);
     }
     this.segIdx++;
-    if (this.segIdx >= this.segments.length) {
-      this.done = true;
-      this.event(0, '🏁 Клетчатый флаг — сессия окончена');
-      return;
-    }
     const next = this.segments[this.segIdx];
     this.segment = next.name;
     this.clock = next.simClock;
+    this.clockExpired = false;
     for (const car of this.cars) {
-      if (car.state === 'elim') continue;
+      if (car.state === 'elim' || car.state === 'done') continue;
+      car.state = 'garage';
       car.exitAt = this.t + (car.manual ? 0 : (0.04 + rnd() * 0.2) * next.simClock);
       delete car.segBest[next.name];
       if (car.manual) { car.stayBoxed = true; car.playerOut = false; car.boxNext = false; }
@@ -1160,7 +1192,15 @@ export class SessionSim {
     this.event(0, `Зелёный свет — ${next.name}`);
   }
 
+  /** Игрок подтвердил завершение сессии (после того как все доездили последние круги) */
+  finishSession() {
+    this.awaitingConfirm = false;
+    this.done = true;
+    this.event(0, '🏁 Клетчатый флаг — сессия окончена');
+  }
+
   displayClock(): string {
+    if (this.clockExpired) return '0:00';
     const seg = this.segments[Math.min(this.segIdx, this.segments.length - 1)];
     const frac = Math.max(0, this.clock / seg.simClock);
     const secs = Math.ceil(frac * seg.realMin * 60);
@@ -1171,7 +1211,7 @@ export class SessionSim {
   /** Быстро досимулировать сессию до конца (для кнопки «Завершить сессию») */
   fastForward() {
     let guard = 0;
-    while (!this.done && guard < 20000) {
+    while (!this.done && !this.awaitingConfirm && guard < 20000) {
       this.tick(1.5);
       guard++;
     }
@@ -1359,6 +1399,7 @@ export class RaceSim {
   kind: SimKind;
   degMod: number;
   wetSession: boolean;
+  leaderDone = false; // лидер финишировал — остальные доезжают свои круги
 
   constructor(gs: GameState, kind: SimKind, grid: string[], totalLaps: number, circuit: Circuit, wetSession: boolean, rainMidRace: boolean, startOverrides?: Record<string, string>) {
     this.gs = gs;
@@ -1534,7 +1575,10 @@ export class RaceSim {
       const rainOk = ['I', 'W', 'AW'].includes(car.tire);
       lap += rainOk ? 1.2 : 7.5;
     }
-    if (!first && car.drs) lap -= 0.55 * c.ovrt * this.gs.mods.drsMod;
+    // DRS даёт время только на прямых (drs-сегментах трассы)
+    if (!first && car.drs && this.track.drsSegs[this.pointIndex(car.dist)]) {
+      lap -= 0.55 * c.ovrt * this.gs.mods.drsMod;
+    }
     return Math.max(lap, baseLap(c, this.gs.playerSeries) * 0.8);
   }
 
@@ -1636,6 +1680,11 @@ export class RaceSim {
       }
     }
     this.computeStandings();
+    // лидер финишировал: ждём, пока все остальные машины реально пересекут финиш
+    if (this.leaderDone && !this.cars.some((c) => c.status === 'run')) {
+      this.done = true;
+      this.event(this.totalLaps, '🏁 Клетчатый флаг — все машины финишировали', 'flag');
+    }
   }
 
   pointIndex(dist: number): number {
@@ -1662,13 +1711,15 @@ export class RaceSim {
     });
     const lead = sorted.find((c) => c.status === 'run');
     const leaderSpeed = lead ? this.track.total / lead.targetLap : 60;
+    const drsSeries = this.gs.playerSeries === 'f2' || this.gs.playerSeries === 'f3';
     sorted.forEach((car, i) => {
       car.pos = i + 1;
       if (lead && car.status === 'run') {
         car.gap = car === lead ? 0 : Math.max(0, (lead.dist - car.dist) / leaderSpeed);
         const ahead = sorted[i - 1];
         car.interval = ahead && ahead.status === 'run' ? Math.max(0, (ahead.dist - car.dist) / leaderSpeed) : car.gap;
-        car.drs = car.interval < 1.0 && this.circuit.ovrt > 0.25 && this.gs.playerSeries !== 'indy' && this.phase === 'green';
+        // DRS: только Ф2/Ф3, со 2-го круга, при отставании менее секунды
+        car.drs = drsSeries && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
       } else {
         car.drs = false;
       }
@@ -1680,8 +1731,10 @@ export class RaceSim {
     car.pitting = true;
     car.pitLap = true; // текущий круг — «грязный» (не в зачёт лучшего)
     car.pitCrawl = this.pitLoss(car);
-    const stintIdx = car.pitLaps.indexOf(car.lap - 1);
-    const planTire = this.raining ? (car.tire === 'AW' ? 'AW' : 'I') : car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] ?? car.tire;
+    const stintIdx = car.pitLaps.indexOf(car.lap);
+    const planTire = this.raining
+      ? (car.tire === 'AW' ? 'AW' : 'I')
+      : (stintIdx >= 0 ? car.plan[Math.min(stintIdx + 1, car.plan.length - 1)] : car.tire) ?? car.tire;
     const nextTire = car.pendingTire ?? planTire;
     car.pendingTire = null;
     const servedPen = car.penQueue.reduce((s, p) => s + p, 0);
@@ -1716,9 +1769,8 @@ export class RaceSim {
       car.dist = this.track.total * car.lap;
       const sortedFin = this.cars.filter((c) => c.status === 'fin').sort((a, b) => a.finishT - b.finishT);
       if (sortedFin[0] === car) {
-        this.event(car.lap, `🏁 ${car.code} — ${car.name} выигрывает!`, 'flag');
-        this.phase = 'cheq';
-        this.finishAll();
+        this.event(car.lap, `🏁 ${car.code} — ${car.name} выигрывает! Остальные доезжают круги`, 'flag');
+        this.leaderDone = true;
       }
       return;
     }
@@ -1765,8 +1817,9 @@ export class RaceSim {
       this.event(car.lap, `${car.code} пользуется машиной безопасности — ранний пит`, 'pit');
       return;
     }
-    // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финиша
-    const wpl = this.wearPerLap(car);
+    // ИИ не заезжает в зону проколов (80%): прогноз — не превысит ли износ 75% до планового пита/финища
+    const cd = compoundDef(this.gs.playerSeries, car.tire);
+    const wpl = this.wearPerLap(car) / cd.life; // доля износа за круг
     const targetLap = nextPlanned ?? this.totalLaps;
     const projected = wear + (targetLap - car.lap) * wpl;
     if (projected > 0.75 && !soon && car.lap < this.totalLaps - 2) {
@@ -1839,7 +1892,7 @@ export class RaceSim {
     car.outReason = reason;
     this.event(car.lap, `⚠ ${car.code} (${car.name}) сошёл: ${reason}`, 'crash');
     const lapsLeft = this.totalLaps - this.leader().lap;
-    if (this.phase === 'green' && lapsLeft > 3) {
+    if (this.phase === 'green' && !this.leaderDone && lapsLeft > 3) {
       const roll = rnd();
       if (reason.includes('Авария') && roll < 0.12 && this.leader().lap < this.totalLaps * 0.6) {
         this.phase = 'red';
@@ -1847,8 +1900,8 @@ export class RaceSim {
         this.event(car.lap, '🔴 КРАСНЫЙ ФЛАГ — гонка остановлена', 'red');
       } else if (roll < 0.48) {
         this.phase = 'sc';
-        this.phaseEndLap = this.leader().lap + 2 + Math.floor(rnd() * 2);
-        this.event(car.lap, '🚔 МАШИНА БЕЗОПАСНОСТИ на трассе', 'sc');
+        this.phaseEndLap = this.leader().lap + 3 + Math.floor(rnd() * 2); // SC — минимум 3 круга
+        this.event(car.lap, '🚔 МАШИНА БЕЗОПАСНОСТИ на трассе (минимум 3 круга)', 'sc');
       } else if (roll < 0.8) {
         this.phase = 'vsc';
         this.phaseEndLap = this.leader().lap + 2;
