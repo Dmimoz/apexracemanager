@@ -1668,12 +1668,8 @@ export class RaceSim {
   tick(dt: number) {
     if (this.done) return;
     if (this.phase === 'red') {
-      this.redT -= dt;
-      if (this.redT <= 0) {
-        this.phase = 'green';
-        for (const car of this.cars) if (car.status === 'run') car.targetLap = this.lapEstimate(car);
-        this.event(this.leader().lap, 'ЗЕЛЁНЫЙ ФЛАГ — рестарт с ходу!', 'flag');
-      }
+      // Все машины в боксах, гонка стоит. Отсчёт идёт в tickRedFlag (реальное время),
+      // поэтому красный флаг завершится гарантированно — даже если трансляция на паузе.
       this.t += dt;
       return;
     }
