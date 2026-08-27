@@ -1422,6 +1422,8 @@ export class RaceSim {
   degMod: number;
   wetSession: boolean;
   leaderDone = false; // лидер финишировал — остальные доезжают свои круги
+  // Физическая машина безопасности: выезжает перед лидером, ведёт пелотон, на рестарте уезжает в боксы
+  sc: { active: boolean; leaving: boolean; dist: number; exitTarget: number } | null = null;
 
   constructor(gs: GameState, kind: SimKind, grid: string[], totalLaps: number, circuit: Circuit, wetSession: boolean, rainMidRace: boolean, startOverrides?: Record<string, string>) {
     this.gs = gs;
@@ -2180,9 +2182,7 @@ export class RaceSim {
       if (reason.includes('Авария') && roll < 0.12 && this.leader().lap < this.totalLaps * 0.6) {
         this.raiseRedFlag(car.lap);
       } else if (roll < 0.48) {
-        this.phase = 'sc';
-        this.phaseEndLap = this.leader().lap + 3 + Math.floor(rnd() * 2); // SC — минимум 3 круга
-        this.event(car.lap, '🚔 МАШИНА БЕЗОПАСНОСТИ на трассе (минимум 3 круга)', 'sc');
+        this.deploySafetyCar(car.lap);
       } else if (roll < 0.8) {
         this.phase = 'vsc';
         this.phaseEndLap = this.leader().lap + 2;
