@@ -779,6 +779,32 @@ export interface SessionCar {
 
 interface Segment { name: string; simClock: number; realMin: number; cutoff: number }
 
+/** Реальные форматы сессий по сериям: FP / квалификация / спринт-квалификация */
+function buildSegments(sid: SeriesId, kind: 'practice' | 'quali' | 'sq'): Segment[] {
+  const f1 = sid === 'f1';
+  if (kind === 'practice') {
+    const min = f1 || sid === 'indy' ? 60 : sid === 'fe' ? 30 : 45;
+    return [{ name: 'FP', simClock: min * 12, realMin: min, cutoff: 0 }];
+  }
+  if (kind === 'sq' && f1) {
+    return [
+      { name: 'SQ1', simClock: 180, realMin: 12, cutoff: 5 },
+      { name: 'SQ2', simClock: 150, realMin: 10, cutoff: 5 },
+      { name: 'SQ3', simClock: 120, realMin: 8, cutoff: 0 },
+    ];
+  }
+  if (kind === 'quali' && f1) {
+    return [
+      { name: 'Q1', simClock: 270, realMin: 18, cutoff: 5 },
+      { name: 'Q2', simClock: 225, realMin: 15, cutoff: 5 },
+      { name: 'Q3', simClock: 180, realMin: 12, cutoff: 0 },
+    ];
+  }
+  // не-Ф1: одна сессия
+  const min = sid === 'fe' ? 32 : 30;
+  return [{ name: 'QUALI', simClock: min * 14, realMin: min, cutoff: 0 }];
+}
+
 export class SessionSim {
   gs: GameState;
   kind: 'practice' | 'quali' | 'sq';
@@ -804,24 +830,7 @@ export class SessionSim {
     this.wetSession = wetSession;
     this.raining = wetSession;
     const sid = gs.playerSeries;
-    const f1 = sid === 'f1';
-    if (kind === 'practice') {
-      this.segments = [{ name: f1 ? 'FP' : 'FP', simClock: f1 ? 720 : 540, realMin: f1 ? 60 : 45, cutoff: 0 }];
-    } else if (kind === 'quali' && f1) {
-      this.segments = [
-        { name: 'Q1', simClock: 270, realMin: 18, cutoff: 5 },
-        { name: 'Q2', simClock: 225, realMin: 15, cutoff: 5 },
-        { name: 'Q3', simClock: 180, realMin: 12, cutoff: 0 },
-      ];
-    } else if (kind === 'sq' && f1) {
-      this.segments = [
-        { name: 'SQ1', simClock: 180, realMin: 12, cutoff: 5 },
-        { name: 'SQ2', simClock: 150, realMin: 10, cutoff: 5 },
-        { name: 'SQ3', simClock: 120, realMin: 8, cutoff: 0 },
-      ];
-    } else {
-      this.segments = [{ name: 'QUALI', simClock: 420, realMin: 30, cutoff: 0 }];
-    }
+    this.segments = buildSegments(sid, kind);
     this.segment = this.segments[0].name;
     this.clock = this.segments[0].simClock;
     this.playerSetup = { ...driverSetup(gs, grid.find((id) => gs.drivers[id]?.teamId === gs.playerTeamId) ?? '') };
@@ -849,7 +858,7 @@ export class SessionSim {
         manual: isPlayer, playerOut: false, boxNext: false, advice: null,
         setup,
         program: isPlayer && kind === 'practice' ? 'race' : null,
-        stayBoxed: false, tireFlip: false,
+        stayBoxed: isPlayer, tireFlip: false,   // машины игрока ждут в боксах, выезд — вручную
       });
       const car = this.cars[this.cars.length - 1];
       car.runLen = this.planRunLen(car);
@@ -901,8 +910,8 @@ export class SessionSim {
       if (car.state === 'elim' || car.state === 'done') { car.status = 'park'; continue; }
       if (car.state === 'garage') {
         car.status = 'park';
-        // игрок управляет выездом только если сам оставил машину в боксах (stayBoxed)
-        const mayExit = (car.manual && car.stayBoxed) ? car.playerOut : this.t >= car.exitAt;
+        // машины игрока выезжают ТОЛЬКО по его команде; ИИ — по своему таймеру
+        const mayExit = car.manual ? car.playerOut : this.t >= car.exitAt;
         if (mayExit && this.clock > seg0 * 0.05) {
           car.state = 'flying';
           car.phase2 = 'out';
@@ -953,13 +962,12 @@ export class SessionSim {
       lapTime += 5 + rnd() * 2;
       car.state = 'garage';
       car.status = 'park';
-      const calledIn = car.boxNext && car.manual;   // игрок сам позвал в боксы
       const dwell = this.kind === 'practice' ? 30 + rnd() * 50 : 20 + rnd() * 40;
       car.exitAt = this.t + dwell;
       car.phase2 = 'out';
       car.pushed = 0;
       car.boxNext = false;
-      car.stayBoxed = calledIn;                      // стоит, пока игрок не выпустит
+      car.stayBoxed = car.manual;                    // машина игрока ждёт следующей команды
       car.playerOut = false;
       car.runLen = this.planRunLen(car);
       if (car.manual && this.kind === 'practice') {
@@ -999,19 +1007,15 @@ export class SessionSim {
     const med = dry.length > 1 ? dry[1].id : soft;
     const wear = car.tireAge / Math.max(1, compoundDef(sid, car.tire).life);
     let next: string | null = null;
-    if (car.manual) {
-      if (car.program === 'quali') next = soft;
-      else if (car.program === 'race') next = wear > 0.55 ? med : null;
-      else if (car.program === 'tires') { car.tireFlip = !car.tireFlip; next = car.tireFlip ? med : soft; }
-    } else if (rnd() < 0.35) {
-      next = dry[Math.floor(rnd() * dry.length)].id;
+    if (!car.manual && rnd() < 0.35) {
+      next = dry[Math.floor(rnd() * dry.length)].id;   // ИИ сам тасует составы
     }
     if (next && next !== car.tire) {
       this.event(0, `${car.code} сменил шины: ${tireName(sid, car.tire)} → ${tireName(sid, next)}`);
       car.tire = next;
       car.tireAge = 0;
     } else if (car.tireAge > 0 && wear > 0.5) {
-      car.tireAge = 0; // свежий комплект того же состава
+      car.tireAge = 0; // свежий комплект того же состава (состав для игрока выбирает он сам)
     }
   }
 
@@ -1062,6 +1066,7 @@ export class SessionSim {
       if (car.state === 'elim') continue;
       car.exitAt = this.t + (car.manual ? 0 : (0.04 + rnd() * 0.2) * next.simClock);
       delete car.segBest[next.name];
+      if (car.manual) { car.stayBoxed = true; car.playerOut = false; car.boxNext = false; }
     }
     this.event(0, `Зелёный свет — ${next.name}`);
   }
@@ -1116,10 +1121,11 @@ export class SessionSim {
     this.event(0, `${car.code}: программа — ${names[prog]}`);
   }
 
+  /** Выбор комплекта на серию (из боксов). В практике и квалификации — решает игрок */
   setSessionTire(did: string, tireId: string) {
     const car = this.cars.find((c) => c.did === did);
-    if (!car || !car.manual || car.state !== 'garage' || this.kind !== 'practice') return;
-    this.event(0, `${car.code}: ${tireName(this.gs.playerSeries, car.tire)} → ${tireName(this.gs.playerSeries, tireId)}`);
+    if (!car || !car.manual || car.state !== 'garage') return;
+    this.event(0, `${car.code}: ставим ${tireName(this.gs.playerSeries, tireId)}`);
     car.tire = tireId;
     car.tireAge = 0;
   }
@@ -1219,6 +1225,7 @@ export interface SimCar {
   status: 'run' | 'out' | 'fin'; outReason: string; finishT: number;
   plan: string[]; pitLaps: number[]; pitting: boolean;
   pendingTire: string | null;
+  pitCrawl: number; pitLap: boolean;   // ползёт по пит-лейну; флаг «круг с питом» (не в зачёт лучшего)
   penQueue: number[];
   drs: boolean; pos: number; gap: number; interval: number;
   skill: number; perf: number; cons: number; mode: StrategyPreset;
@@ -1276,10 +1283,10 @@ export class RaceSim {
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
         lap: 0, dist: -i * 14 - (i % 2) * 7, targetLap: 0, lapStartT: 0, lapStartDist: -i * 14,
         lastLap: null, bestLap: null,
-        tire: plan.startTire, tireAge: 0, fuel: gs.playerSeries === 'f1' ? 105 : 70, damage: 0,
+        tire: plan.startTire, tireAge: 0, fuel: Math.round(totalLaps * 1.35 * 1.06), damage: 0,
         status: 'run', outReason: '', finishT: 0,
         plan: plan.stints, pitLaps: plan.pitLaps, pitting: false,
-        pendingTire: null,
+        pendingTire: null, pitCrawl: 0, pitLap: false,
         penQueue: [], drs: false, pos: i + 1, gap: 0, interval: 0,
         skill, perf, cons: d.consistency,
         mode: t.id === gs.playerTeamId ? gs.strategy[did] ?? 'balanced' : plan.mode,
@@ -1466,7 +1473,13 @@ export class RaceSim {
         if (car.status !== 'run' || this.phase === 'cheq') continue;
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
-        const speed = (this.track.total / car.targetLap) * f * phaseMod;
+        let speed = (this.track.total / car.targetLap) * f * phaseMod;
+        // пит-стоп: машина ползёт по пит-лейну, реально теряя время и позиции
+        if (car.pitting && car.pitCrawl > 0) {
+          speed *= 0.35;
+          car.pitCrawl -= dt;
+          if (car.pitCrawl <= 0) this.completePit(car);
+        }
         car.dist += speed * dt;
         while (car.dist - car.lapStartDist >= this.track.total) this.cross(car);
       }
