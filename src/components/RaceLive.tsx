@@ -40,6 +40,17 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   pausedRef.current = paused;
   const prevPhaseRef = useRef<string>('green');
   const appliedRef = useRef(false); // гарантия однократного применения результатов
+  const [raceDone, setRaceDone] = useState(false);
+  const raceDoneRef = useRef(false);
+
+  // Подвести итоги — только по клику игрока (не выкидываем из трансляции автоматически)
+  const finish = () => {
+    if (!appliedRef.current) {
+      appliedRef.current = true;
+      dispatch({ type: 'APPLY_SESSION', sim: simRef.current, stage });
+    }
+    onDone();
+  };
 
   useEffect(() => {
     if (!started) return;
@@ -57,18 +68,15 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
         if (s.phase === 'sc' || s.phase === 'vsc' || s.phase === 'red') setPaused(true);
         prevPhaseRef.current = s.phase;
       }
-      if (!pausedRef.current) {
+      if (!s.done && !pausedRef.current) {
         acc += dtReal * BASE * speedRef.current;
         while (acc > STEP) { s.tick(STEP); acc -= STEP; }
       }
       force((x) => (x + 1) % 1000000);
-      if (s.done) {
-        if (!appliedRef.current) {
-          appliedRef.current = true;
-          dispatch({ type: 'APPLY_SESSION', sim: s, stage });
-        }
-        onDone();
-        return;
+      // когда все машины финишировали — не закрываем трансляцию, а ждём клика игрока
+      if (s.done && !raceDoneRef.current) {
+        raceDoneRef.current = true;
+        setRaceDone(true);
       }
       raf = requestAnimationFrame(loop);
     };
@@ -135,9 +143,18 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
           ))}
         </div>
       </header>
-      {paused && (
+      {paused && !raceDone && (
         <div className="shrink-0 px-4 py-1 bg-[#141a10] border-b border-[#2f8f4e55] text-[11px] text-[#4ade80] font-semibold">
           ⏸ Симуляция на паузе{(sim.phase === 'sc' || sim.phase === 'vsc' || sim.phase === 'red') ? ' — нейтралитет: спланируйте стратегию (пит-стоп под SC теряет вдвое меньше)' : ''}
+        </div>
+      )}
+      {raceDone && (
+        <div className="shrink-0 px-4 py-2.5 bg-[#2f8f4e] flex items-center gap-4 flex-wrap">
+          <span className="font-disp text-[13px] font-bold tracking-[0.12em] text-white">🏁 ВСЕ МАШИНЫ ФИНИШИРОВАЛИ</span>
+          <button onClick={finish}
+            className="font-disp text-[11px] font-bold px-4 py-1.5 bg-white text-[#12351f] hover:bg-[#d8f224] transition-colors">
+            ПОДВЕСТИ ИТОГИ →
+          </button>
         </div>
       )}
 

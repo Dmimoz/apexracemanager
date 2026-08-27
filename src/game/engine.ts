@@ -1468,9 +1468,7 @@ export class RaceSim {
       ? this.gs.strategy[d.id] ?? 'balanced'
       : style > 0.66 ? 'aggr' : style < 0.33 ? 'cons' : 'balanced';
     // коэффициент износа от режима (синхронно с wearPerLap)
-    const modeF = mode === 'aggr' ? 1.55 : mode === 'cons' ? 0.6 : 1;
-    // эффективный ресурс состава в кругах при данном режиме (целимся на ~78% износа к концу stint — до зоны проколов)
-    const effLife = (id: string) => Math.floor(compoundDef(sid, id).life * 0.78 / modeF);
+    const modeF = mode === 'aggr' ? 1.3 : mode === 'cons' ? 0.75 : 1;
 
     if (wet) return { startTire: rainTire, stints: [], pitLaps: [], mode };
     if (isPlayer) {
@@ -1490,43 +1488,49 @@ export class RaceSim {
     }
 
     // ---- ОСНОВНЫЕ ГОНКИ ----
-    if (sid === 'f1') {
-      const S = effLife('S'), M = effLife('M'), H = effLife('H');
-      if (mode === 'aggr') {
-        // два стопа на мягкой резине
-        const l1 = Math.min(Math.round(laps * 0.3), S);
-        const l2 = Math.min(Math.round(laps * 0.62) - l1, M);
-        stints.push('S', 'M', 'H');
-        pitLaps.push(l1, l1 + l2);
-      } else if (mode === 'cons') {
-        // один поздний стоп, максимально бережно
-        stints.push('H', 'M');
-        pitLaps.push(Math.min(Math.round(laps * 0.55), H));
-      } else {
-        // классический один стоп
-        stints.push('M', 'H');
-        pitLaps.push(Math.min(Math.round(laps * 0.44), M));
-      }
-    } else if (sid === 'f2') {
-      const O = effLife('O'), P = effLife('P');
-      if (mode === 'aggr') { stints.push('O', 'P'); pitLaps.push(Math.min(Math.round(laps * 0.38), O)); }
-      else if (mode === 'cons') { stints.push('P', 'O'); pitLaps.push(Math.min(Math.round(laps * 0.56), P)); }
-      else { stints.push('O', 'P'); pitLaps.push(Math.min(Math.round(laps * 0.46), O)); }
-    } else if (sid === 'indy') {
-      if (c.kind === 'oval') {
-        const stopEvery = Math.max(8, effLife('ALT') - Math.round(rnd() * 6));
-        for (let l = stopEvery; l < laps - 3; l += stopEvery) pitLaps.push(l);
-        stints.push(...pitLaps.map(() => rnd() < 0.7 ? 'ALT' : 'PRIM'));
-      } else {
-        const A = effLife('ALT');
-        if (mode === 'aggr') { stints.push('ALT', 'ALT'); pitLaps.push(Math.min(Math.round(laps * 0.32), A), Math.min(Math.round(laps * 0.64), A + effLife('ALT'))); }
-        else { stints.push('ALT', 'PRIM'); pitLaps.push(Math.min(Math.round(laps * 0.45), A)); }
-      }
-    } else if (sid === 'f3') {
-      // Ф3 и спринт, и гонку едет без пит-стопов — один комплект на всю дистанцию
+    if (sid === 'f3') {
+      // Ф3 едет гонку без пит-стопов — один комплект на всю дистанцию
       stints.push('M');
     } else if (sid === 'fe') {
       stints.push('AW'); // всесезонная резина, без замен
+    } else if (sid === 'indy' && c.kind === 'oval') {
+      // овал: частые заезды под топливо, длина окна зависит от ресурса альтернативной резины
+      const degF = 0.55 + c.deg * 0.65;
+      const capAlt = Math.max(6, Math.floor(compoundDef(sid, 'ALT').life * 0.75 / (modeF * degF)));
+      const stopEvery = Math.max(8, capAlt - Math.round(rnd() * 6));
+      for (let l = stopEvery; l < laps - 3; l += stopEvery) pitLaps.push(l);
+      stints.push(...pitLaps.map(() => rnd() < 0.7 ? 'ALT' : 'PRIM'));
+    } else {
+      // Ф1, Ф2, Индикар(роуд): надёжные stint'ы БЕЗ переката резины.
+      // Каждый отрезок не длиннее ресурса своего состава; число питов растёт само,
+      // если дистанция длинная. Последний отрезок гарантированно доезжает до финиша.
+      const ladder = dryCompounds(sid);                      // мягкий → жёсткий
+      const hard = ladder[ladder.length - 1].id;
+      // ресурс состава в кругах при текущем режиме и абразивности трассы (цель ~75% износа — до зоны проколов)
+      const degF = 0.55 + c.deg * 0.65;
+      const capOf = (id: string) => Math.max(4, Math.floor(compoundDef(sid, id).life * 0.75 / (modeF * degF)));
+      // желаемое число питов по режиму; увеличиваем, если даже жёсткий состав не покроет дистанцию
+      let stops = mode === 'aggr' ? 2 : 1;
+      while (Math.ceil(laps / (stops + 1)) > capOf(hard) && stops < 4) stops++;
+      const n = Math.min(stops + 1, Math.max(1, laps));
+      // длины отрезков: поровну, последний забирает остаток (он <= capOf(hard) по построению)
+      const even = Math.max(1, Math.floor(laps / n));
+      const lens: number[] = [];
+      let used = 0;
+      for (let i = 0; i < n; i++) {
+        const len = i === n - 1 ? laps - used : even;
+        lens.push(Math.max(1, len));
+        used += len;
+      }
+      // каждому отрезку — самый мягкий состав, который его выдержит
+      let acc = 0;
+      for (let i = 0; i < n; i++) {
+        let tire = hard;
+        for (const t of ladder) { if (capOf(t.id) >= lens[i]) { tire = t.id; break; } }
+        stints.push(tire);
+        acc += lens[i];
+        if (i < n - 1) pitLaps.push(acc);
+      }
     }
     if (!stints.length) stints.push(sid === 'f1' ? 'M' : sid === 'indy' ? 'ALT' : 'O');
     return { startTire: stints[0], stints, pitLaps, mode };
@@ -1540,7 +1544,7 @@ export class RaceSim {
   /** Износ за круг (в долях от номинала 1.0). Режим гонки, топливо и уход за резиной реально меняют износ.
    *  Откалибровано так, что в сбалансированном режиме резина изнашивается на 100% примерно за свой ресурс (life кругов). */
   wearPerLap(car: SimCar): number {
-    const modeF = car.mode === 'aggr' ? 1.55 : car.mode === 'cons' ? 0.6 : 1;
+    const modeF = car.mode === 'aggr' ? 1.3 : car.mode === 'cons' ? 0.75 : 1;
     const fuelF = car.fuelMode === 'push' ? 1.25 : car.fuelMode === 'eco' ? 0.8 : 1;
     const degF = 0.55 + this.circuit.deg * 0.65; // абразивность трассы (0.7 → 1.0)
     const neutralF = this.phase === 'sc' || this.phase === 'vsc' ? 0.3 : 1; // под SC/VSC резину берегут
@@ -1853,7 +1857,7 @@ export class RaceSim {
     }
     // сначала пробуем сэкономить режимом: «беречь шины» снижает износ до ×0.6
     if (car.mode !== 'cons') {
-      const wplCons = wpl * (0.6 / (car.mode === 'aggr' ? 1.55 : 1));
+      const wplCons = wpl * (0.75 / (car.mode === 'aggr' ? 1.3 : 1));
       if (wear + lapsLeft * wplCons <= 0.8) {
         car.mode = 'cons';
         this.event(car.lap, `${car.code} бережёт резину — щадящий режим`, 'info');
