@@ -458,14 +458,28 @@ function GarageTab() {
           </div>
         )) : (gs.playerSeries === 'f2' || gs.playerSeries === 'f3') ? myDrivers.map((d) => {
           const eng = gs.components[d.id]?.ENG ?? 1;
+          const wear = gs.components[d.id]?.wear ?? 0;
           const cost = engineSwapCost(gs.playerSeries);
+          const wearPct = Math.min(100, Math.round((wear / 130) * 100));
           return (
-            <div key={d.id} className="mb-3 border border-[#2a3442] p-3 flex items-center gap-3 flex-wrap">
-              <FlagTag nat={d.nat} /><span className="font-bold text-[13px] flex-1">{d.name}</span>
-              <span className="text-[12px] text-[#9fb0c4] num">Мотор №{eng}</span>
-              <Btn className="!py-1" onClick={() => { dispatch({ type: 'SWAP_ENGINE', did: d.id }); say('Мотор заменён — без штрафа решётки'); }}>
-                Заменить · {money(cost)}
-              </Btn>
+            <div key={d.id} className="mb-3 border border-[#2a3442] p-3">
+              <div className="flex items-center gap-3 flex-wrap mb-1.5">
+                <FlagTag nat={d.nat} /><span className="font-bold text-[13px] flex-1">{d.name}</span>
+                <span className="text-[12px] text-[#9fb0c4] num">Мотор №{eng}</span>
+                <Btn className="!py-1" onClick={() => { dispatch({ type: 'SWAP_ENGINE', did: d.id }); say(`Мотор ${d.code} заменён — без штрафа решётки`); }}>
+                  Заменить · {money(cost)}
+                </Btn>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-[#7f8da0] w-20 shrink-0">Износ СУ</span>
+                <div className="flex-1 h-[7px] bg-[#0d1117] border border-[#232b37] overflow-hidden">
+                  <div className="h-full transition-all duration-700" style={{
+                    width: `${wearPct}%`,
+                    background: wearPct > 70 ? '#ff6b4b' : wearPct > 40 ? '#ffc94d' : '#4ade80',
+                  }} />
+                </div>
+                <span className="num text-[11px] w-9 text-right" style={{ color: wearPct > 70 ? '#ff6b4b' : wearPct > 40 ? '#ffc94d' : '#4ade80' }}>{wearPct}%</span>
+              </div>
             </div>
           );
         }) : <div className="text-[13px] text-[#7f8da0]">Единый мотор: замена без штрафа решётки.</div>}

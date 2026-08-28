@@ -568,7 +568,7 @@ export function newCareer(seriesId: SeriesId, teamId: string): GameState {
   for (const d of DRIVERS) {
     if (d.reserve) continue;
     if (d.seriesId === 'f1') components[d.id] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
-    else if (d.seriesId === 'f2' || d.seriesId === 'f3') components[d.id] = { ENG: 1 }; // единый мотор, без разделения на элементы
+    else if (d.seriesId === 'f2' || d.seriesId === 'f3') components[d.id] = { ENG: 1, wear: 0 }; // единый мотор + индивидуальный износ
   }
   const strategy: Record<string, StrategyPreset> = {};
   for (const d of DRIVERS) strategy[d.id] = 'balanced';
@@ -640,9 +640,10 @@ function aiFitComponents(gs: GameState, w: Weekend) {
         t.wear = 12;
       }
     } else if (t.seriesId === 'f2' || t.seriesId === 'f3') {
-      // Ф2/Ф3: мотор один, замена дешёвая и без штрафа — ИИ меняют при заметном износе
-      if (t.wear > 60 && rnd() < 0.6) {
-        swapEngine(gs, ds[0].id);
+      // Ф2/Ф3: мотор индивидуальный, замена дешёвая и без штрафа — ИИ меняют тому, у кого износ высок
+      // (износ копится ×0.1, поэтому порог ~6 ≈ 60 в командной шкале Ф1)
+      for (const d of ds) {
+        if (engineWearOf(gs, d.id) > 6 && rnd() < 0.6) swapEngine(gs, d.id);
       }
     }
   }
@@ -2303,7 +2304,10 @@ export class RaceSim {
       }
     }
     const team = this.gs.teams[car.tid];
-    const wearBase = this.gs.playerSeries === 'f1' ? team.wear : team.wear * 0.6;
+    // Ф2/Ф3: износ СУ индивидуальный (×0.1 при накоплении, поэтому ×10 для сопоставимой шкалы отказов)
+    const wearBase = this.gs.playerSeries === 'f1' ? team.wear
+      : (this.gs.playerSeries === 'f2' || this.gs.playerSeries === 'f3') ? engineWearOf(this.gs, car.did) * 10
+      : team.wear * 0.6;
     const modeF2 = car.mode === 'aggr' ? 1.6 : car.mode === 'cons' ? 0.55 : 1;
     const pf = Math.max(0, wearBase - 40) * 0.00022 * modeF2 + 0.00045;
     if (rnd() < pf) {
@@ -2325,7 +2329,12 @@ export class RaceSim {
         }
       } else {
         // ремонтируемый отказ: мотор починят, износ частично сброшен
-        team.wear = Math.max(10, team.wear * 0.4);
+        if (sid === 'f2' || sid === 'f3') {
+          const comps = this.gs.components[car.did];
+          if (comps) comps.wear = Math.max(1, (comps.wear ?? 0) * 0.4);
+        } else {
+          team.wear = Math.max(10, team.wear * 0.4);
+        }
         this.retire(car, 'Механический отказ (отремонтирован к следующей сессии)');
       }
     }
@@ -2601,11 +2610,14 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     if (stage === 'race') { d.gpStarts++; if (sid === 'f1') d.f1Starts++; }
     const pos = results.indexOf(car) + 1;
     d.form = clamp(d.form + (pos === 1 ? 4 : pos <= 3 ? 2 : pos <= 6 ? 1 : car.status === 'out' ? -2 : -0.5), 40, 95);
-    // износ СУ: в Ф2/Ф3 — в 10 раз ниже (надёжные серийные моторы)
+    // износ СУ: в Ф2/Ф3 — в 10 раз ниже (надёжные серийные моторы) и ИНДИВИДУАЛЕН для каждого болида
     const wearMul = (sid === 'f2' || sid === 'f3') ? 0.1 : 1;
-    if (car.mode === 'aggr') t.wear += 3.2 * wearMul;
-    else if (car.mode === 'cons') t.wear += 1.1 * wearMul;
-    else t.wear += 2 * wearMul;
+    const inc = (car.mode === 'aggr' ? 3.2 : car.mode === 'cons' ? 1.1 : 2) * wearMul;
+    if (sid === 'f2' || sid === 'f3') {
+      addEngineWear(gs, car.did, inc); // свой мотор — свой износ
+    } else {
+      t.wear += inc;
+    }
     if (t.id === gs.playerTeamId && (myBest == null || pos < myBest)) myBest = pos;
     // ИИ-команды развивают болиды — только в сериях с апгрейдами (не в серийных Ф2/Ф3)
     if (t.id !== gs.playerTeamId && !SERIES_META[sid].specCar && rnd() < 0.3) {
@@ -2693,18 +2705,29 @@ export function engineSwapCost(sid: SeriesId): number {
   return sid === 'f2' ? 500_000 : 100_000;
 }
 
+/** Износ СУ конкретного болида (Ф2/Ф3 — индивидуальный; в Ф1 износ командный, хранится в team.wear) */
+export function engineWearOf(gs: GameState, did: string): number {
+  return gs.components[did]?.wear ?? 0;
+}
+
+/** Начислить износ СУ конкретному болиду (Ф2/Ф3) */
+export function addEngineWear(gs: GameState, did: string, amount: number) {
+  const comps = gs.components[did] ?? (gs.components[did] = { ENG: 1, wear: 0 });
+  comps.wear = clamp((comps.wear ?? 0) + amount, 0, 130);
+}
+
 /** Заменить мотор Ф2/Ф3 (ENG+1). Без штрафа решётки, списывает стоимость с бюджета команды. */
 export function swapEngine(gs: GameState, did: string): string {
   const d = gs.drivers[did];
   const t = gs.teams[d.teamId!];
   const sid = t.seriesId;
   if (sid !== 'f2' && sid !== 'f3') return '';
-  const comps = gs.components[did] ?? (gs.components[did] = { ENG: 1 });
+  const comps = gs.components[did] ?? (gs.components[did] = { ENG: 1, wear: 0 });
   comps.ENG = (comps.ENG ?? 0) + 1;
+  comps.wear = 0; // износ СУ индивидуален для каждого болида — сбрасываем только у этого пилота
   const cost = engineSwapCost(sid);
   t.budget = Math.max(0, t.budget - cost);
   if (t.id === gs.playerTeamId) gs.budget = Math.max(0, gs.budget - cost);
-  t.wear = 0;
   pushNews(gs, `${t.short}: ${d.code} получил свежий мотор №${comps.ENG} (${money(cost)}, без штрафа)`, 'СУ');
   return `${d.code}: новый мотор №${comps.ENG} — ${money(cost)}, без штрафа`;
 }
@@ -3330,7 +3353,7 @@ function applyAiTransfers(gs: GameState, moves: string[]) {
     if (toTeam.seriesId === 'f1' && !gs.components[d.id]) {
       gs.components[d.id] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
     }
-    if (toTeam.seriesId === 'f2' || toTeam.seriesId === 'f3') gs.components[d.id] = { ENG: 1 };
+    if (toTeam.seriesId === 'f2' || toTeam.seriesId === 'f3') gs.components[d.id] = { ENG: 1, wear: 0 };
     toTeam.setups[d.id] = defaultSetup();
     moves.push(`${d.name} переходит в ${toTeam.short}${from ? ` из ${from.short}` : ''}`);
   }
@@ -3382,7 +3405,9 @@ export function startNewSeason(gs: GameState) {
     for (const d of seriesDrivers(gs, sid)) ss.dStand[d.id] = 0;
   }
   for (const did of Object.keys(gs.components)) {
-    gs.components[did] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
+    const sidOf = gs.drivers[did]?.seriesId;
+    if (sidOf === 'f2' || sidOf === 'f3') gs.components[did] = { ENG: 1, wear: 0 };
+    else gs.components[did] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
   }
   for (const t of Object.values(gs.teams)) { t.wear = 0; t.capSpent = 0; }
   gs.rookieUsed = 0;
