@@ -6,7 +6,7 @@ import {
   applySession, beginWeekend, cancelDeal, cancelNego, cancelStaffNego, clone, editorPoints, editorSet,
   endSeason, fitComponent, offerFeeToTeam, offerToDriver, offerToStaff, saveGame, setDriverSetup,
   setRookieChoice, setStrategy, simOtherSeries, skipSession, startNego, startNewSeason,
-  startStaffNego, startUpgrade, switchPlayerTeam,
+  startStaffNego, startUpgrade, swapEngine, switchPlayerTeam,
 } from './engine';
 
 export type Action =
@@ -19,6 +19,7 @@ export type Action =
   | { type: 'SET_ROOKIE'; slot: 0 | 1 | 2; rookieId?: string }
   | { type: 'SET_SETUP'; did: string; field: keyof Setup; value: number }
   | { type: 'FIT_COMPONENT'; did: string; el: Parameters<typeof fitComponent>[2] }
+  | { type: 'SWAP_ENGINE'; did: string }
   | { type: 'UPGRADE'; area: UpgradeArea; strategy: UpgradeStrategy }
   | { type: 'START_NEGO'; did: string }
   | { type: 'OFFER_DRIVER'; did: string }
@@ -78,6 +79,10 @@ function reducer(gs: GameState, a: Action): GameState {
       saveGame('auto', g);
       return g;
     }
+    case 'SWAP_ENGINE':
+      swapEngine(g, a.did);
+      saveGame('auto', g);
+      return g;
     case 'UPGRADE':
       startUpgrade(g, a.area, a.strategy);
       saveGame('auto', g);

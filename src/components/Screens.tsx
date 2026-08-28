@@ -354,6 +354,32 @@ function GarageTab() {
     <div className="space-y-4">
       {msg && <div className="panel clip-sm border-l-4 px-4 py-2 text-[13px]" style={{ borderLeftColor: meta.color }}>{msg}</div>}
 
+      <Panel title="Пилоты команды" delay={0}>
+        <div className="grid md:grid-cols-2 gap-3">
+          {myDrivers.map((d) => (
+            <div key={d.id} className="border border-[#2a3442] p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <FlagTag nat={d.nat} />
+                <span className="font-bold text-[14px]">{d.name}</span>
+                <span className="text-[11px] text-[#7f8da0] num">· {d.age} лет</span>
+                {d.retiring && <span className="text-[9px] font-disp font-bold text-[#ff6b4b] border border-[#ff6b4b55] px-1.5 py-px">УХОДИТ ПОСЛЕ СЕЗОНА</span>}
+                <span className="ml-auto text-[11px] text-[#9fb0c4] num">{d.contract > 0 ? `контракт: ${d.contract} г.` : 'без контракта'}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6">
+                <StatBar label="Скорость" value={d.pace} />
+                <StatBar label="Борьба" value={d.racecraft} />
+                <StatBar label="Стабильность" value={d.consistency} />
+                <StatBar label="Дождь" value={d.wet} />
+              </div>
+              <div className="flex items-center justify-between mt-1">
+                <span className="text-[11px] text-[#7f8da0]">Форма: <b className="num" style={{ color: d.form >= 75 ? '#4ade80' : d.form >= 60 ? '#ffc94d' : '#ff6b4b' }}>{Math.round(d.form)}</b></span>
+                <span className="text-[11px] text-[#7f8da0] num">Зарплата: {money(d.salary)}/г</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
       <Panel title={`Болид — ${pt.name}${meta.specCar ? ` · ${meta.specCar}` : ''}`} accent right={
         <span className="font-disp text-[11px] text-[#9fb0c4]">{meta.specCar ? 'единая спецификация' : ''}</span>
       }>
@@ -437,7 +463,7 @@ function GarageTab() {
             <div key={d.id} className="mb-3 border border-[#2a3442] p-3 flex items-center gap-3 flex-wrap">
               <FlagTag nat={d.nat} /><span className="font-bold text-[13px] flex-1">{d.name}</span>
               <span className="text-[12px] text-[#9fb0c4] num">Мотор №{eng}</span>
-              <Btn className="!py-1" onClick={() => { say(dispatchRet(swapEngine(gs, d.id))); }}>
+              <Btn className="!py-1" onClick={() => { dispatch({ type: 'SWAP_ENGINE', did: d.id }); say('Мотор заменён — без штрафа решётки'); }}>
                 Заменить · {money(cost)}
               </Btn>
             </div>
