@@ -388,7 +388,6 @@ function GarageTab() {
             <StatBar key={a} label={areaLabel(a) + (a === 'power' && !pt.works ? ' (клиентский)' : '')}
               value={a === 'power' ? supplierPower(gs, pt) : pt[a] ?? 60} color={pt.color} />
           ))}
-          <StatBar label="Износ силовой установки" value={Math.min(100, pt.wear)} color="#ff6b4b" />
         </div>
 
         {meta.specCar ? (

@@ -1493,6 +1493,7 @@ export interface SimCar {
   dsq: boolean;                         // дисквалифицирован (нарушение правила двух составов)
   redParked: boolean;                   // стоит в боксах под красным флагом
   scPitUsed: boolean;                   // уже воспользовался бесплатным питом под SC (один раз)
+  finishSeq: number;                    // порядковый номер пересечения финишной черты (для стабильного порядка)
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1525,6 +1526,7 @@ export class RaceSim {
   degMod: number;
   wetSession: boolean;
   leaderDone = false; // лидер финишировал — остальные доезжают свои круги
+  finishSeqCounter = 0; // монотонный счётчик порядка пересечения финиша
   // Физическая машина безопасности: выезжает с пит-лейна, ЖДЁТ лидера, затем ведёт пелотон,
   // а на рестарте уезжает в боксы. state: 'waiting' — едет медленно впереди, пока лидер не догонит;
   // 'leading' — подобрала лидера, пелотон собирается.
@@ -1569,6 +1571,7 @@ export class RaceSim {
         dsq: false,
         redParked: false,
         scPitUsed: false,
+        finishSeq: 0,
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1677,6 +1680,13 @@ export class RaceSim {
     return dry[Math.floor(dry.length / 2)].id;
   }
 
+  /** Состав для гонки БЕЗ пит-стопов: самый мягкий, который доедет до финиша с износом <79%
+   *  (не войдёт в зону проколов). Если ни один не хватает — самый живучий. */
+  noStopTire(dry: { id: string }[], laps: number, wearRate: number): string {
+    for (const c of dry) if (this.finishLimit(c.id, wearRate) >= laps) return c.id;
+    return dry[dry.length - 1].id;
+  }
+
   /** Построить полную стратегию машины (режим + план отрезков). Вызывается ОДИН раз.
    *  Износ одинаков для всех при равных условиях; разнообразие стратегий — из логического
    *  выбора между разумными вариантами (составы × число питов), направленного режимом и позицией. */
@@ -1706,12 +1716,15 @@ export class RaceSim {
     }
 
     const dry = dryCompounds(sid); // мягкий → жёсткий
-    const start = startOverride ?? this.pickStartTire(dry, mode);
 
-    // Спринты, Ф3 и ФЕ — без пит-стопов: один отрезок до финища
+    // Спринты, Ф3 и ФЕ — без пит-стопов: один отрезок до финища.
+    // Состав подбирается так, чтобы доехать без пита и с износом <80% (без риска прокола).
     if (isSprint || sid === 'f3' || sid === 'fe') {
+      const start = startOverride ?? this.noStopTire(dry, laps, wearRate);
       return { mode, fuelMode, setup, legs: [{ tire: start, startLap: 0, endLap: laps, isFinish: true }], startTire: start };
     }
+
+    const start = startOverride ?? this.pickStartTire(dry, mode);
 
     // Овалы Индикара: регулярные заезды под топливо
     if (sid === 'indy' && this.circuit.kind === 'oval') {
@@ -1748,12 +1761,16 @@ export class RaceSim {
       for (const l of cand) sum += legTime(l.tire, l.endLap - l.startLap);
       return sum + (cand.length - 1) * (pitBase + posStopAdj);
     };
+    // стратегия безопасна, если НИ ОДИН отрезок не изнашивает шину выше зоны проколов
+    const planSafe = (cand: TireLeg[]) =>
+      cand.every((l) => (l.endLap - l.startLap) <= this.finishLimit(l.tire, wearRate));
 
     let legs: TireLeg[] = [];
     let bestEst = Infinity;
     for (const st of startOpts) {
       for (const n of stopOpts) {
         const cand = this.mergeLegs(this.buildLegsFixed(st, laps, wearRate, n, dry));
+        if (!planSafe(cand)) continue; // переизнашивает резину (риск прокола) — не рассматриваем
         const e = estTotal(cand);
         if (e < bestEst) { bestEst = e; legs = cand; }
       }
@@ -1939,12 +1956,13 @@ export class RaceSim {
       if (scLead) {
         const sIdx = this.pointIndex(this.sc!.dist);
         const sF = this.track.factor[sIdx] / this.track.avgFactor;
-        const scSpeedMul = this.sc!.state === 'waiting' ? 0.5 : 0.72;
+        // в 'waiting' SC почти стоит у выезда из боксов, в 'leading' — ведёт пелотон
+        const scSpeedMul = this.sc!.state === 'waiting' ? 0.06 : 0.72;
         this.sc!.dist += crawlCap * sF * scSpeedMul * dt;
-        // лидер догнал машину безопасности — она «подобрала» его, начинается сбор пелотона
+        // лидер доехал до машины безопасности — она «подобрала» его, начинается сбор пелотона
         if (this.sc!.state === 'waiting' && this.sc!.dist - lead.dist <= 25) {
           this.sc!.state = 'leading';
-          this.phaseEndLap = lead.lap + 3 + Math.floor(rnd() * 2); // отсчёт кругов — с момента поимки
+          this.phaseEndLap = lead.lap + 3 + Math.floor(rnd() * 2); // минимум 3 круга — с момента поимки
           this.event(lead.lap, '🚔 Машина безопасности подобрала лидера — пелотон собирается', 'sc');
         }
       }
@@ -2031,7 +2049,7 @@ export class RaceSim {
     // Машина в боксах стоит на месте (dist заморожен) — соперники обходят её по одному,
     // поэтому в таблице она ОПУСКАЕТСЯ ПЛАВНО, а не падает вниз и не телепортируется обратно.
     const sorted = [...this.cars].sort((a, b) => {
-      if (a.status === 'fin' && b.status === 'fin') return a.finishT - b.finishT;
+      if (a.status === 'fin' && b.status === 'fin') return a.finishSeq - b.finishSeq;
       if (a.status === 'fin') return -1;
       if (b.status === 'fin') return 1;
       if (a.status === 'out' && b.status === 'out') return b.dist - a.dist;
@@ -2148,8 +2166,9 @@ export class RaceSim {
       car.status = 'fin';
       car.finished = true;
       car.finishT = this.t;
+      car.finishSeq = ++this.finishSeqCounter; // фиксируем точный порядок пересечения линии
       car.dist = this.track.total * car.lap;
-      const sortedFin = this.cars.filter((c) => c.status === 'fin').sort((a, b) => a.finishT - b.finishT);
+      const sortedFin = this.cars.filter((c) => c.status === 'fin').sort((a, b) => a.finishSeq - b.finishSeq);
       if (sortedFin[0] === car) {
         this.event(car.lap, `🏁 ${car.code} — ${car.name} выигрывает! Остальные доезжают круги`, 'flag');
         this.leaderDone = true;
@@ -2200,7 +2219,6 @@ export class RaceSim {
 
     const wear = this.wearFrac(car);
     const nextPlanned = this.nextPitLap(car);
-    const plannedSoon = nextPlanned != null && nextPlanned - car.lap <= 2;
 
     // СПРИНТ: питов нет — бережём резину, чтобы не войти в зону проколов
     if (isSprint) {
@@ -2259,11 +2277,12 @@ export class RaceSim {
       }
     }
 
-    // АВАРИЙНЫЙ пит: износ у зоны проколов, а ближайшего пита нет (страховка от неточного плана)
-    if (wear > 0.78 && !plannedSoon && car.lap < this.totalLaps - 2) {
+    // АВАРИЙНЫЙ пит: износ достиг зоны проколов (80%+). Не питаемся, если до финиша ≤3 кругов —
+    // дешевле доехать, чем тратить пит. ИИ старается планировать так, чтобы сюда не попадать.
+    if (wear >= 0.80 && lapsLeft > 3) {
       car.pendingPitLap = car.lap + 1;
       car.pendingTire = null;
-      this.event(car.lap, `${car.code}: резина на пределе — вынужденный заезд`, 'pit');
+      this.event(car.lap, `${car.code}: износ ${Math.round(wear * 100)}% — вынужденный заезд`, 'pit');
     }
   }
 
@@ -2344,11 +2363,14 @@ export class RaceSim {
    *  и едет медленно, пока лидер её не «поймает» — только тогда пелотон начинает собираться. */
   deploySafetyCar(lap: number) {
     this.phase = 'sc';
-    this.phaseEndLap = lap + 4 + Math.floor(rnd() * 2); // минимум 3 круга после поимки лидера
+    this.phaseEndLap = 9999; // сбросится, когда SC подберёт лидера
     const lead = this.leader();
-    this.sc = { active: true, leaving: false, dist: lead.dist + 320, exitTarget: 0, state: 'waiting' };
+    // SC выезжает с пит-лейна — у выезда, сразу за той стартовой чертой, которую лидер
+    // пересечёт следующей, — и ЖДЁТ там лидера. Пелотон начнёт собираться только после поимки.
+    const nextLine = (Math.floor(lead.dist / this.track.total) + 1) * this.track.total;
+    this.sc = { active: true, leaving: false, dist: nextLine + 40, exitTarget: 0, state: 'waiting' };
     this.scLastLapMsg = false;
-    this.event(lap, '🚔 Машина безопасности выезжает с пит-лейна — жёлтые флаги', 'sc');
+    this.event(lap, '🚔 Машина безопасности выехала с пит-лейна — ждёт лидера, жёлтые флаги', 'sc');
   }
 
   retire(car: SimCar, reason: string) {
@@ -2461,6 +2483,7 @@ export class RaceSim {
   /** Корректные времена финиша: у каждого финишёра — свой момент пересечения линии */
   finishAll() {
     const totalDist = this.totalLaps * this.track.total;
+    const finishing: SimCar[] = [];
     for (const car of this.cars) {
       if (car.status === 'run') {
         car.status = 'fin';
@@ -2468,15 +2491,20 @@ export class RaceSim {
         const remaining = Math.max(0, totalDist - car.dist);
         const speed = Math.max(20, this.track.total / car.targetLap);
         car.finishT = this.t + remaining / speed + (car.pos - 1) * 0.05;
+        finishing.push(car);
       }
     }
+    // назначаем finishSeq в порядке прогнозного финиша, чтобы порядок был однозначным
+    finishing.sort((a, b) => a.finishT - b.finishT);
+    for (const car of finishing) car.finishSeq = ++this.finishSeqCounter;
     this.done = true;
   }
 
   results(): SimCar[] {
     return [...this.cars].sort((a, b) => {
       if (a.dsq !== b.dsq) return a.dsq ? 1 : -1; // дисквалифицированные — в конец
-      if (a.finished && b.finished) return a.finishT - b.finishT;
+      // финишёры — строго в порядке пересечения линии (finishSeq), без «перескоков»
+      if (a.finished && b.finished) return a.finishSeq - b.finishSeq;
       if (a.finished) return -1;
       if (b.finished) return 1;
       return b.lap - a.lap || b.dist - a.dist;
