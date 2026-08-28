@@ -42,6 +42,9 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   const appliedRef = useRef(false); // гарантия однократного применения результатов
   const [raceDone, setRaceDone] = useState(false);
   const raceDoneRef = useRef(false);
+  // Отслеживание смены позиций: зелёная ▲ (выиграл) / красная ▼ (потерял) с количеством
+  const lastPosRef = useRef<Record<string, number>>({});
+  const posDeltasRef = useRef<Record<string, { delta: number; ts: number }>>({});
 
   // Подвести итоги — только по клику игрока (не выкидываем из трансляции автоматически)
   const finish = () => {
@@ -118,6 +121,17 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   const winnerT = finCars.length ? Math.min(...finCars.map((c) => c.finishT)) : 0;
   const slicks = SERIES_META[sid].compounds.filter((c) => !['I', 'W'].includes(c.id));
   const wetTires = SERIES_META[sid].compounds.filter((c) => ['I', 'W', 'AW'].includes(c.id));
+
+  // Обновляем дельты позиций (машины на трассе; в боксах/сходах не считаем, чтобы не шуметь)
+  const nowMs = performance.now();
+  for (const car of cars) {
+    const inPit = car.pitting || car.pitCrawl > 0;
+    const prev = lastPosRef.current[car.did];
+    if (car.status === 'run' && !inPit && prev != null && prev !== car.pos) {
+      posDeltasRef.current[car.did] = { delta: prev - car.pos, ts: nowMs }; // + = поднялся
+    }
+    if (car.status === 'run') lastPosRef.current[car.did] = car.pos;
+  }
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -206,13 +220,25 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm shrink-0" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
+                  {(() => {
+                    const pd = posDeltasRef.current[car.did];
+                    const show = pd && nowMs - pd.ts < 4000 && pd.delta !== 0 && car.status === 'run' && !car.pitting && car.pitCrawl <= 0;
+                    if (!show || !pd) return null;
+                    const up = pd.delta > 0;
+                    return (
+                      <span className={`font-disp text-[10px] font-bold shrink-0 ${up ? 'text-[#4ade80]' : 'text-[#ff6b4b]'}`}
+                        title={up ? `Выиграл ${pd.delta} поз.` : `Потерял ${Math.abs(pd.delta)} поз.`}>
+                        {up ? '▲' : '▼'}{Math.abs(pd.delta)}
+                      </span>
+                    );
+                  })()}
                   <span className="num text-[#e7edf4] w-[70px] text-right font-semibold text-[13px]">
                     {isOut ? 'СХОД'
                       : isDsq ? <span className="text-[#ff6b4b] font-bold" title="Дисквалифицирован: правило двух составов">ДСК</span>
                       : inPit ? <span className="text-[#ffc94d]">В БОКСАХ</span>
                       : car.status === 'fin'
                         ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
-                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval > 90 ? `+${(car.interval / 60).toFixed(0)}м` : `+${car.interval.toFixed(1)}`}
+                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval >= 90 ? `+${Math.floor(car.interval / 60)}:${(car.interval % 60).toFixed(3).padStart(6, '0')}` : `+${car.interval.toFixed(3)}`}
                   </span>
                   <span className={`num w-[86px] text-right text-[13px] ${isPurple ? 'text-[#c884ff] font-bold' : 'text-[#7f8da0]'}`}>
                     {car.lastLap != null ? fmtLap(car.lastLap) : '—'}

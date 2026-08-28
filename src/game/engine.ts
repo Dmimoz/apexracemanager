@@ -1480,6 +1480,7 @@ export interface SimCar {
   lap: number; dist: number; targetLap: number; lapStartT: number; lapStartDist: number;
   lastLap: number | null; bestLap: number | null;
   tire: string; tireAge: number; wear: number; fuel: number; damage: number;
+  noiseState: number; // сглаженный шум темпа (случайное блуждание) — плавные отрывы
   status: 'run' | 'out' | 'fin'; outReason: string; finishT: number;
   legs: TireLeg[]; legIdx: number; pitting: boolean;  // единый детерминированный план
   pendingTire: string | null;
@@ -1562,6 +1563,7 @@ export class RaceSim {
         lastLap: null, bestLap: null,
         // стартовый запас топлива под ВЫБРАННЫЙ режим с запасом 12% — ИИ гарантированно доедет
         tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * fuelBurnFor(strat.fuelMode) * 1.12), damage: 0,
+        noiseState: 0,
         status: 'run', outReason: '', finishT: 0,
         legs: strat.legs, legIdx: 0, pitting: false,
         pendingTire: null, pendingPitLap: null, pitCrawl: 0, pitLap: false, pitCount: 0,
@@ -1600,7 +1602,8 @@ export class RaceSim {
     const modeF = mode === 'aggr' ? 1.3 : mode === 'cons' ? 0.75 : 1;
     const fuelF = fuelMode === 'push' ? 1.2 : fuelMode === 'eco' ? 0.8 : 1;
     const degF = 0.55 + this.circuit.deg * 0.65;
-    return degF * this.degMod * modeF * fuelF * tireCareFactor(this.gs, t.id) * setupWearMult(setup);
+    const f2F = this.gs.playerSeries === 'f2' ? 0.9 : 1; // в Ф2 резина изнашивается на 10% медленнее
+    return degF * this.degMod * modeF * fuelF * tireCareFactor(this.gs, t.id) * setupWearMult(setup) * f2F;
   }
 
   /** Безопасная длина отрезка: кругов до 72% износа (запас до зоны прокола 80%). */
@@ -1881,7 +1884,8 @@ export class RaceSim {
     const modePen = car.mode === 'aggr' ? -0.38 : car.mode === 'cons' ? 0.3 : 0;
     const fuelPen = car.fuelMode === 'push' ? -0.3 : car.fuelMode === 'eco' ? 0.3 : 0;
     const orderPen = car.letThrough ? 0.9 : 0;
-    const noise = (1.4 - car.cons / 100) * 0.34 * (rnd() * 2 - 1);
+    // сглаженный шум: случайное блуждание с возвратом — темп меняется плавно, отрывы не «скачут»
+    const noise = (1.4 - car.cons / 100) * 0.34 * car.noiseState;
     let lap = baseLap(c, this.gs.playerSeries) + 10.4 - car.perf * 0.085 - car.skill * 0.06
       + tire + car.fuel * 0.033 + car.damage * 0.03 + modePen + fuelPen + orderPen + noise
       + setupLapDelta(car.setup, c);
@@ -2192,7 +2196,8 @@ export class RaceSim {
     }
     this.rollIncidents(car);
     this.aiDecide(car);
-    if (this.nextPitLap(car) === car.lap) this.beginPit(car);
+    // машина свернула в боксы: комплект свежий (0%), топливо и износ за этот круг не тратятся
+    if (this.nextPitLap(car) === car.lap) { this.beginPit(car); return; }
     car.fuel = Math.max(0, car.fuel - fuelBurnFor(car.fuelMode));
     if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
     if (car.letThrough) {
@@ -2201,6 +2206,8 @@ export class RaceSim {
     }
     car.tireAge++;
     car.wear += this.wearPerLap(car);
+    // плавный шум темпа на следующий круг (обновляется раз в круг)
+    car.noiseState = car.noiseState * 0.55 + (rnd() * 2 - 1) * 0.45;
     car.targetLap = this.lapEstimate(car);
   }
 
@@ -2226,6 +2233,22 @@ export class RaceSim {
 
     const wear = this.wearFrac(car);
     const nextPlanned = this.nextPitLap(car);
+
+    // ДИНАМИЧЕСКИЕ РЕЖИМЫ: ИИ осмысленно управляет агрессией под состояние резины и борьбу.
+    // Свежие шины + плотная борьба → атака/полный газ; изношенная резина → сбавить, беречь.
+    const fighting = car.interval > 0.05 && car.interval < 1.0;
+    if (wear < 0.3 && fighting && car.fuelMode === 'normal' && car.fuel > lapsLeft * fuelBurnFor('push') + 2) {
+      car.fuelMode = 'push';
+    } else if (wear > 0.55 && car.fuelMode === 'push') {
+      car.fuelMode = 'normal';
+    }
+    if (wear > 0.55 && car.mode === 'aggr') {
+      car.mode = 'balanced'; // резина «плывёт» — сбавить, не добивать комплект
+      car.targetLap = this.lapEstimate(car);
+    } else if (wear < 0.25 && fighting && car.mode === 'balanced') {
+      car.mode = 'aggr'; // свежие шины + борьба за позицию — атаковать
+      car.targetLap = this.lapEstimate(car);
+    }
 
     // СПРИНТ: питов нет — бережём резину, чтобы не войти в зону проколов
     if (isSprint) {
