@@ -128,7 +128,15 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
     const inPit = car.pitting || car.pitCrawl > 0;
     const prev = lastPosRef.current[car.did];
     if (car.status === 'run' && !inPit && prev != null && prev !== car.pos) {
-      posDeltasRef.current[car.did] = { delta: prev - car.pos, ts: nowMs }; // + = поднялся
+      const d = prev - car.pos; // + = поднялся
+      const existing = posDeltasRef.current[car.did];
+      // серия обгонов в одном направлении складывается в одну стрелку (▲2, ▼3…)
+      if (existing && nowMs - existing.ts < 4000 && Math.sign(existing.delta) === Math.sign(d)) {
+        existing.delta += d;
+        existing.ts = nowMs;
+      } else {
+        posDeltasRef.current[car.did] = { delta: d, ts: nowMs };
+      }
     }
     if (car.status === 'run') lastPosRef.current[car.did] = car.pos;
   }
