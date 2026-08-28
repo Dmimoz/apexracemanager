@@ -565,8 +565,10 @@ export function newCareer(seriesId: SeriesId, teamId: string): GameState {
     series[sid] = { id: sid, rounds, current: 0, dStand, tStand };
   }
   const components: Record<string, Record<string, number>> = {};
-  for (const d of DRIVERS) if (d.seriesId === 'f1' && !d.reserve) {
-    components[d.id] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
+  for (const d of DRIVERS) {
+    if (d.reserve) continue;
+    if (d.seriesId === 'f1') components[d.id] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
+    else if (d.seriesId === 'f2' || d.seriesId === 'f3') components[d.id] = { ENG: 1 }; // единый мотор, без разделения на элементы
   }
   const strategy: Record<string, StrategyPreset> = {};
   for (const d of DRIVERS) strategy[d.id] = 'balanced';
@@ -590,6 +592,7 @@ export function newCareer(seriesId: SeriesId, teamId: string): GameState {
   }
   genJuniors(gs, 30);
   gs.sponsors = generateSponsors(gs);
+  planRetirements(gs);
   pushNews(gs, `Вы возглавили ${teams[teamId].name} в чемпионате ${SERIES_META[seriesId].fullName} (сезон-2026)`, 'КАРЬЕРА');
   saveGame('auto', gs);
   return gs;
@@ -625,15 +628,22 @@ export function currentStage(gs: GameState): Stage | null {
 
 function aiFitComponents(gs: GameState, w: Weekend) {
   for (const t of Object.values(gs.teams)) {
-    if (t.seriesId !== 'f1' || t.id === gs.playerTeamId) continue;
-    if (t.wear > 70 && rnd() < 0.5) {
-      const ds = raceDriversOfTeam(gs, t.id);
-      if (!ds.length) continue;
-      const d = pick(ds);
-      const el = pick(['ICE', 'TC', 'MGU-H', 'MGU-K'] as const);
-      const msg = fitComponent(gs, d.id, el, w);
-      pushNews(gs, `${t.short}: ${msg}`, 'СУ');
-      t.wear = 12;
+    if (t.id === gs.playerTeamId) continue;
+    const ds = raceDriversOfTeam(gs, t.id);
+    if (!ds.length) continue;
+    if (t.seriesId === 'f1') {
+      if (t.wear > 70 && rnd() < 0.5) {
+        const d = pick(ds);
+        const el = pick(['ICE', 'TC', 'MGU-H', 'MGU-K'] as const);
+        const msg = fitComponent(gs, d.id, el, w);
+        pushNews(gs, `${t.short}: ${msg}`, 'СУ');
+        t.wear = 12;
+      }
+    } else if (t.seriesId === 'f2' || t.seriesId === 'f3') {
+      // Ф2/Ф3: мотор один, замена дешёвая и без штрафа — ИИ меняют при заметном износе
+      if (t.wear > 60 && rnd() < 0.6) {
+        swapEngine(gs, ds[0].id);
+      }
     }
   }
 }
@@ -665,7 +675,7 @@ export function announceUpdates(gs: GameState) {
   if (SERIES_META[sid].specCar) return;
   const ups = gs._aiUpdates ?? {};
   const names = Object.entries(ups).map(([tid, list]) => `${gs.teams[tid]?.short}: ${(list as string[]).join(', ')}`).slice(0, 4);
-  if (names.length) pushNews(gs, `К следующему уик-энду команды готовят обновления — ${names.join('; ')}`, 'РАЗВИТИЕ');
+  if (names.length) pushNews(gs, `🔧 Команды привезли обновления на этот уик-энд — ${names.join('; ')}`, 'РАЗВИТИЕ');
   gs._aiUpdates = {};
 }
 
@@ -823,7 +833,10 @@ export function skipSession(gs: GameState): SessionResult | null {
   const advice = setupAdvice(gs, c, wet);
   w.setupNotes = advice;
   notes.push(advice[0] ?? '');
-  for (const t of Object.values(gs.teams)) if (t.seriesId === sid) t.base = clamp(t.base + 0.015, 0, 99);
+  // лёгкое развитие от практики — только там, где разрешены апгрейды (не для серийных Ф2/Ф3)
+  if (!SERIES_META[sid].specCar) {
+    for (const t of Object.values(gs.teams)) if (t.seriesId === sid) t.base = clamp(t.base + 0.015, 0, 99);
+  }
   const result: SessionResult = { stage, title: stageTitle(gs, stage), rows, notes };
   w.results[stage] = result;
   w.stageIdx++;
@@ -1311,7 +1324,10 @@ function applyPracticeSim(gs: GameState, sim: SessionSim, stage: Stage) {
       notes.push('Собраны данные для аэропрограммы (+0.12 к аэродинамике)');
     }
   }
-  for (const t of Object.values(gs.teams)) if (t.seriesId === gs.playerSeries) t.base = clamp(t.base + 0.015, 0, 99);
+  // лёгкое развитие от практики — только там, где разрешены апгрейды (не для серийных Ф2/Ф3)
+  if (!SERIES_META[gs.playerSeries].specCar) {
+    for (const t of Object.values(gs.teams)) if (t.seriesId === gs.playerSeries) t.base = clamp(t.base + 0.015, 0, 99);
+  }
   if (sim.wetSession) notes.push('Мокрая трасса: собраны данные по дождевым настройкам');
   const advice = setupAdvice(gs, sim.circuit, sim.wetSession);
   w.setupNotes = advice;
@@ -1422,8 +1438,11 @@ export class RaceSim {
   degMod: number;
   wetSession: boolean;
   leaderDone = false; // лидер финишировал — остальные доезжают свои круги
-  // Физическая машина безопасности: выезжает перед лидером, ведёт пелотон, на рестарте уезжает в боксы
-  sc: { active: boolean; leaving: boolean; dist: number; exitTarget: number } | null = null;
+  // Физическая машина безопасности: выезжает с пит-лейна, ЖДЁТ лидера, затем ведёт пелотон,
+  // а на рестарте уезжает в боксы. state: 'waiting' — едет медленно впереди, пока лидер не догонит;
+  // 'leading' — подобрала лидера, пелотон собирается.
+  sc: { active: boolean; leaving: boolean; dist: number; exitTarget: number; state: 'waiting' | 'leading' } | null = null;
+  scLastLapMsg = false; // объявлено ли «возобновление на следующем круге»
 
   constructor(gs: GameState, kind: SimKind, grid: string[], totalLaps: number, circuit: Circuit, wetSession: boolean, rainMidRace: boolean, startOverrides?: Record<string, string>) {
     this.gs = gs;
@@ -1447,7 +1466,7 @@ export class RaceSim {
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
         lap: 0, dist: -i * 14 - (i % 2) * 7, targetLap: 0, lapStartT: 0, lapStartDist: -i * 14,
         lastLap: null, bestLap: null,
-        tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * 1.5 * 1.05), damage: 0,
+        tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * 1.25 * 1.02), damage: 0,
         status: 'run', outReason: '', finishT: 0,
         legs: strat.legs, legIdx: 0, pitting: false,
         pendingTire: null, pendingPitLap: null, pitCrawl: 0, pitLap: false, pitCount: 0,
@@ -1827,14 +1846,23 @@ export class RaceSim {
           if (car.pitCrawl <= 0) this.leavePit(car);
         }
       }
-      // 2) физическая машина безопасности едет во главе и задаёт темп
+      // 2) физическая машина безопасности: едет медленно, пока лидер её не догонит ('waiting'),
+      //    затем ведёт пелотон ('leading')
       const scLead = this.sc && this.sc.active && !this.sc.leaving;
       if (scLead) {
         const sIdx = this.pointIndex(this.sc!.dist);
         const sF = this.track.factor[sIdx] / this.track.avgFactor;
-        this.sc!.dist += crawlCap * sF * 0.72 * dt;
+        const scSpeedMul = this.sc!.state === 'waiting' ? 0.5 : 0.72;
+        this.sc!.dist += crawlCap * sF * scSpeedMul * dt;
+        // лидер догнал машину безопасности — она «подобрала» его, начинается сбор пелотона
+        if (this.sc!.state === 'waiting' && this.sc!.dist - lead.dist <= 25) {
+          this.sc!.state = 'leading';
+          this.phaseEndLap = lead.lap + 3 + Math.floor(rnd() * 2); // отсчёт кругов — с момента поимки
+          this.event(lead.lap, '🚔 Машина безопасности подобрала лидера — пелотон собирается', 'sc');
+        }
       }
-      // 3) пелотон на трассе: строится плотно за машиной безопасности / лидером
+      const bunching = scLead && this.sc!.state === 'leading';
+      // 3) пелотон: при 'waiting' — просто сбавляют темп (жёлтые флаги), при 'leading' — плотно за SC
       const onTrack = this.runningSorted().filter((c) => c.pitCrawl <= 0 && !c.pitting);
       let prevDist = -1e9;
       for (let rank = 0; rank < onTrack.length; rank++) {
@@ -1843,8 +1871,8 @@ export class RaceSim {
         const idx = this.pointIndex(car.dist);
         const f = this.track.factor[idx] / this.track.avgFactor;
         // лидер следует за машиной безопасности; остальные — за впереди идущим
-        const target = (rank === 0 && scLead) ? this.sc!.dist - 20 : (rank === 0 ? Infinity : prevDist - gap);
-        let speed = (this.track.total / car.targetLap) * f * 0.7; // −30% к темпу
+        const target = (rank === 0 && bunching) ? this.sc!.dist - 20 : (rank === 0 || !bunching ? Infinity : prevDist - gap);
+        let speed = (this.track.total / car.targetLap) * f * (bunching ? 0.7 : 0.78); // −30% / −22% к темпу
         if (car.dist < target) {
           const need = target - car.dist;
           speed = Math.max(speed, Math.min(need / dt, crawlCap * f * catchMul));
@@ -1872,6 +1900,13 @@ export class RaceSim {
       }
     }
     if (this.phase === 'sc' || this.phase === 'vsc') {
+      // последний круг под нейтрализацией — предупреждаем о возобновлении
+      if (lead.lap === this.phaseEndLap - 1 && !this.scLastLapMsg) {
+        this.scLastLapMsg = true;
+        this.event(lead.lap, this.phase === 'sc'
+          ? '🚔 SC IN THIS LAP — гонка возобновится на следующем круге'
+          : '⚠ VSC заканчивается — возобновление на следующем круге', 'sc');
+      }
       if (lead.lap >= this.phaseEndLap) {
         if (this.phase === 'sc' && this.sc) {
           this.sc.leaving = true;                       // машина безопасности уходит на пит-лейн
@@ -1906,6 +1941,8 @@ export class RaceSim {
 
   computeStandings() {
     const inPit = (c: SimCar) => c.status === 'run' && (c.pitting || c.pitCrawl > 0);
+    // Машина в боксах стоит на месте (dist заморожен) — соперники обходят её по одному,
+    // поэтому в таблице она ОПУСКАЕТСЯ ПЛАВНО, а не падает вниз и не телепортируется обратно.
     const sorted = [...this.cars].sort((a, b) => {
       if (a.status === 'fin' && b.status === 'fin') return a.finishT - b.finishT;
       if (a.status === 'fin') return -1;
@@ -1913,12 +1950,9 @@ export class RaceSim {
       if (a.status === 'out' && b.status === 'out') return b.dist - a.dist;
       if (a.status === 'out') return 1;
       if (b.status === 'out') return -1;
-      // машины в боксах — всегда позади машин на трассе
-      if (inPit(a) && !inPit(b)) return 1;
-      if (!inPit(a) && inPit(b)) return -1;
       return b.dist - a.dist;
     });
-    const lead = sorted.find((c) => c.status === 'run' && !inPit(c));
+    const lead = sorted.find((c) => c.status === 'run');
     const leaderSpeed = lead ? this.track.total / lead.targetLap : 60;
     const drsSeries = this.gs.playerSeries === 'f2' || this.gs.playerSeries === 'f3';
     sorted.forEach((car, i) => {
@@ -2187,22 +2221,39 @@ export class RaceSim {
     const modeF2 = car.mode === 'aggr' ? 1.6 : car.mode === 'cons' ? 0.55 : 1;
     const pf = Math.max(0, wearBase - 40) * 0.00022 * modeF2 + 0.00045;
     if (rnd() < pf) {
-      if (this.gs.playerSeries === 'f1') {
-        team.wear = 112;
-        this.retire(car, 'Отказ силовой установки');
+      const sid = this.gs.playerSeries;
+      // 50% отказов — неремонтируемые: узел подлежит замене
+      const unrecoverable = rnd() < 0.5;
+      if (unrecoverable) {
+        if (sid === 'f1') {
+          // Ф1: замена элемента сверх лимита влечёт штраф решётки
+          const el = pick(['ICE', 'TC', 'MGU-H', 'MGU-K'] as const);
+          const msg = fitComponent(this.gs, car.did, el, null);
+          this.retire(car, `Отказ ${el} — узел не подлежит ремонту (замена: ${msg.split('→ ')[1] ?? 'штраф'})`);
+        } else if (sid === 'f2' || sid === 'f3') {
+          swapEngine(this.gs, car.did);
+          this.retire(car, 'Отказ мотора — не подлежит ремонту (установлен свежий)');
+        } else {
+          team.wear = 60;
+          this.retire(car, 'Механический отказ — узел заменён');
+        }
       } else {
-        this.retire(car, 'Механический отказ');
+        // ремонтируемый отказ: мотор починят, износ частично сброшен
+        team.wear = Math.max(10, team.wear * 0.4);
+        this.retire(car, 'Механический отказ (отремонтирован к следующей сессии)');
       }
     }
   }
 
-  /** Выезд физической машины безопасности: она встаёт перед лидером и ведёт пелотон. */
+  /** Выезд физической машины безопасности: она выезжает с пит-лейна впереди лидера
+   *  и едет медленно, пока лидер её не «поймает» — только тогда пелотон начинает собираться. */
   deploySafetyCar(lap: number) {
     this.phase = 'sc';
-    this.phaseEndLap = lap + 3 + Math.floor(rnd() * 2); // минимум 3 круга
+    this.phaseEndLap = lap + 4 + Math.floor(rnd() * 2); // минимум 3 круга после поимки лидера
     const lead = this.leader();
-    this.sc = { active: true, leaving: false, dist: lead.dist + 26, exitTarget: 0 };
-    this.event(lap, '🚔 Машина безопасности на трассе — пелотон за ней (минимум 3 круга)', 'sc');
+    this.sc = { active: true, leaving: false, dist: lead.dist + 320, exitTarget: 0, state: 'waiting' };
+    this.scLastLapMsg = false;
+    this.event(lap, '🚔 Машина безопасности выезжает с пит-лейна — жёлтые флаги', 'sc');
   }
 
   retire(car: SimCar, reason: string) {
@@ -2220,6 +2271,7 @@ export class RaceSim {
       } else if (roll < 0.8) {
         this.phase = 'vsc';
         this.phaseEndLap = this.leader().lap + 2;
+        this.scLastLapMsg = false;
         this.event(car.lap, '⚠ ВИРТУАЛЬНАЯ МАШИНА БЕЗОПАСНОСТИ', 'sc');
       }
     }
@@ -2463,16 +2515,22 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     if (stage === 'race') { d.gpStarts++; if (sid === 'f1') d.f1Starts++; }
     const pos = results.indexOf(car) + 1;
     d.form = clamp(d.form + (pos === 1 ? 4 : pos <= 3 ? 2 : pos <= 6 ? 1 : car.status === 'out' ? -2 : -0.5), 40, 95);
-    if (car.mode === 'aggr') t.wear += 3.2;
-    else if (car.mode === 'cons') t.wear += 1.1;
-    else t.wear += 2;
+    // износ СУ: в Ф2/Ф3 — в 10 раз ниже (надёжные серийные моторы)
+    const wearMul = (sid === 'f2' || sid === 'f3') ? 0.1 : 1;
+    if (car.mode === 'aggr') t.wear += 3.2 * wearMul;
+    else if (car.mode === 'cons') t.wear += 1.1 * wearMul;
+    else t.wear += 2 * wearMul;
     if (t.id === gs.playerTeamId && (myBest == null || pos < myBest)) myBest = pos;
-    if (t.id !== gs.playerTeamId && rnd() < 0.3) {
+    // ИИ-команды развивают болиды — только в сериях с апгрейдами (не в серийных Ф2/Ф3)
+    if (t.id !== gs.playerTeamId && !SERIES_META[sid].specCar && rnd() < 0.3) {
       const area = pick(['aero', 'chassis', 'base'] as const);
       t[area] = clamp(t[area] + 0.25 + rnd() * 0.4, 0, 99);
     }
   }
   for (const t of Object.values(gs.teams)) t.wear = clamp(t.wear, 0, 130);
+
+  // объявления о завершении карьеры (пилоты 34+, в течение сезона)
+  if (stage === 'race') checkRetirements(gs);
 
   // призовые за позицию КАЖДОГО вашего пилота + бонус за быстрый круг в топ-10
   const prizeTable = [0, 500_000, 350_000, 250_000, 150_000, 100_000, 80_000, 60_000, 45_000, 30_000, 20_000];
@@ -2539,6 +2597,29 @@ export function fitComponent(gs: GameState, did: string, el: PUElement, w: Weeke
   target[did] = (target[did] ?? 0) + places;
   const pit = target[did] > 15;
   return `${d.code}: ${el} №${comps[el]} сверх лимита → −${places} поз. (суммарно −${target[did]}${pit ? ', старт с пит-лейна' : ''})`;
+}
+
+/* --- Силовая установка Ф2/Ф3: единый мотор, замена без штрафа решётки --- */
+
+/** Цена замены мотора: Ф2 — $500K, Ф3 — $100K */
+export function engineSwapCost(sid: SeriesId): number {
+  return sid === 'f2' ? 500_000 : 100_000;
+}
+
+/** Заменить мотор Ф2/Ф3 (ENG+1). Без штрафа решётки, списывает стоимость с бюджета команды. */
+export function swapEngine(gs: GameState, did: string): string {
+  const d = gs.drivers[did];
+  const t = gs.teams[d.teamId!];
+  const sid = t.seriesId;
+  if (sid !== 'f2' && sid !== 'f3') return '';
+  const comps = gs.components[did] ?? (gs.components[did] = { ENG: 1 });
+  comps.ENG = (comps.ENG ?? 0) + 1;
+  const cost = engineSwapCost(sid);
+  t.budget = Math.max(0, t.budget - cost);
+  if (t.id === gs.playerTeamId) gs.budget = Math.max(0, gs.budget - cost);
+  t.wear = 0;
+  pushNews(gs, `${t.short}: ${d.code} получил свежий мотор №${comps.ENG} (${money(cost)}, без штрафа)`, 'СУ');
+  return `${d.code}: новый мотор №${comps.ENG} — ${money(cost)}, без штрафа`;
 }
 
 /* ================= ПРОГРАММЫ ОБНОВЛЕНИЙ / ЛИМИТ БЮДЖЕТОВ ================= */
@@ -2933,6 +3014,35 @@ function retireProb(age: number): number {
   return 0.3;
 }
 
+/** Назначает «план завершения карьеры» на сезон: решает, кто уйдёт по его окончании. */
+export function planRetirements(gs: GameState) {
+  const n = gs.series[gs.playerSeries].rounds.length;
+  for (const d of Object.values(gs.drivers)) {
+    d.retiring = false;
+    if (d.age >= 35 && d.teamId) {
+      const pSeason = 1 - Math.pow(1 - retireProb(d.age), n); // шанс объявить за сезон
+      d.willRetire = rnd() < pSeason;
+    } else {
+      d.willRetire = false;
+    }
+  }
+}
+
+/** Объявления о завершении карьеры в течение сезона: не позднее чем за 5 ГП до конца. */
+function checkRetirements(gs: GameState) {
+  const ss = gs.series[gs.playerSeries];
+  const roundsLeft = ss.rounds.length - ss.current;
+  for (const d of Object.values(gs.drivers)) {
+    if (!d.teamId || !d.willRetire || d.retiring) continue;
+    // вероятность объявления растёт к концу; за 5 ГП до конца — гарантированно
+    const p = roundsLeft <= 5 ? 1 : 1 / Math.max(1, roundsLeft - 4);
+    if (rnd() < p) {
+      d.retiring = true;
+      pushNews(gs, `🏁 ${d.name} (${gs.teams[d.teamId].short}, ${d.age} лет) объявил: этот сезон станет последним в его карьере`, 'КАРЬЕРА');
+    }
+  }
+}
+
 export function endSeason(gs: GameState) {
   const sid = gs.playerSeries;
   const ss = gs.series[sid];
@@ -3047,6 +3157,8 @@ export function endSeason(gs: GameState) {
       }
     }
   }
+  // трансферные переходы — в новости
+  for (const m of moves.slice(0, 10)) pushNews(gs, m, 'ТРАНСФЕРЫ');
   gs.summary = {
     year: gs.year,
     champion: champ?.name ?? '—',
@@ -3121,6 +3233,7 @@ export function startNewSeason(gs: GameState) {
   gs.seasonN++;
   gs.mods = { ...gs.mods };
   genJuniors(gs, 30);
+  planRetirements(gs);
   // ротация календаря
   for (const sid of SERIES_ORDER) {
     const ss = gs.series[sid];

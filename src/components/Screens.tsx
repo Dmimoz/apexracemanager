@@ -6,9 +6,10 @@ import {
 import type { Driver, SeriesId, Staff } from '../game/types';
 import {
   F1_BUDGET_CAP, PU_ELEMENTS, UPG_STRAT, areaLabel, availableRookies, budgetCap, canUpgrade,
-  capRemaining, carPerf, circuitOfRound, deleteSave, driversOfTeam, fitComponent, fmtLap,
-  isSeasonOver, listSaves, loadGame, money, playerTeam, puLimit, raceDriversOfTeam, saveGame,
-  seriesDrivers, stagesFor, supplierPower, upgradeCost, upgradeGain, upgradeRounds,
+  capRemaining, carPerf, circuitOfRound, deleteSave, driversOfTeam, engineSwapCost, fitComponent,
+  fmtLap, isSeasonOver, listSaves, loadGame, money, playerTeam, puLimit, raceDriversOfTeam,
+  saveGame, seriesDrivers, stagesFor, supplierPower, swapEngine, upgradeCost, upgradeGain,
+  upgradeRounds,
 } from '../game/engine';
 import type { PUElement } from '../game/engine';
 import { Btn, FlagTag, Icon, Panel, PosBadge, ResultTable, StatBar, TeamDot, WeatherTag } from './ui';
@@ -419,7 +420,7 @@ function GarageTab() {
         )}
       </Panel>
 
-      <Panel title="Элементы силовой установки (Ф1)" delay={40}>
+      <Panel title={isF1 ? 'Элементы силовой установки (Ф1)' : 'Силовая установка'} delay={40}>
         {isF1 ? myDrivers.map((d) => (
           <div key={d.id} className="mb-4 border border-[#2a3442] p-3">
             <div className="flex items-center gap-2 mb-2">
@@ -429,7 +430,22 @@ function GarageTab() {
               {PU_ELEMENTS.map((el) => <PUChip key={el} did={d.id} el={el} />)}
             </div>
           </div>
-        )) : <div className="text-[13px] text-[#7f8da0]">Правило лимита СУ действует только в Формуле 1.</div>}
+        )) : (gs.playerSeries === 'f2' || gs.playerSeries === 'f3') ? myDrivers.map((d) => {
+          const eng = gs.components[d.id]?.ENG ?? 1;
+          const cost = engineSwapCost(gs.playerSeries);
+          return (
+            <div key={d.id} className="mb-3 border border-[#2a3442] p-3 flex items-center gap-3 flex-wrap">
+              <FlagTag nat={d.nat} /><span className="font-bold text-[13px] flex-1">{d.name}</span>
+              <span className="text-[12px] text-[#9fb0c4] num">Мотор №{eng}</span>
+              <Btn className="!py-1" onClick={() => { say(dispatchRet(swapEngine(gs, d.id))); }}>
+                Заменить · {money(cost)}
+              </Btn>
+            </div>
+          );
+        }) : <div className="text-[13px] text-[#7f8da0]">Единый мотор: замена без штрафа решётки.</div>}
+        {(gs.playerSeries === 'f2' || gs.playerSeries === 'f3') && (
+          <div className="text-[11px] text-[#5a6a80] mt-1">Серийный мотор — один элемент, замена без штрафа решётки (Ф2: $500K, Ф3: $100K). Износ в 10 раз ниже, чем в Ф1.</div>
+        )}
       </Panel>
 
       <SponsorsPanel />

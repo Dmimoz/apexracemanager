@@ -27,7 +27,7 @@ export interface Driver {
   teamId: string | null; seriesId: SeriesId | null;
   f1Starts: number; gpStarts: number;
   value: number; salary: number; contract: number;
-  reserve?: boolean; retiring?: boolean;
+  reserve?: boolean; retiring?: boolean; willRetire?: boolean;
 }
 
 export interface Staff {
