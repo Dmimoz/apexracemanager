@@ -89,6 +89,11 @@ export function dryCompounds(sid: SeriesId) {
   return SERIES_META[sid].compounds.filter((c) => !['I', 'W'].includes(c.id));
 }
 
+/** Расход топлива за круг в зависимости от режима (кг/круг). Единый источник правды. */
+export function fuelBurnFor(fuelMode: 'eco' | 'normal' | 'push'): number {
+  return fuelMode === 'eco' ? 1.05 : fuelMode === 'push' ? 1.42 : 1.25;
+}
+
 /** Состав по умолчанию для старта (средний). */
 export function defaultStartTire(sid: SeriesId): string {
   const dry = dryCompounds(sid);
@@ -1555,7 +1560,8 @@ export class RaceSim {
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
         lap: 0, dist: -i * 14 - (i % 2) * 7, targetLap: 0, lapStartT: 0, lapStartDist: -i * 14,
         lastLap: null, bestLap: null,
-        tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * 1.25 * 1.02), damage: 0,
+        // стартовый запас топлива под ВЫБРАННЫЙ режим с запасом 12% — ИИ гарантированно доедет
+        tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * fuelBurnFor(strat.fuelMode) * 1.12), damage: 0,
         status: 'run', outReason: '', finishT: 0,
         legs: strat.legs, legIdx: 0, pitting: false,
         pendingTire: null, pendingPitLap: null, pitCrawl: 0, pitLap: false, pitCount: 0,
@@ -2187,7 +2193,7 @@ export class RaceSim {
     this.rollIncidents(car);
     this.aiDecide(car);
     if (this.nextPitLap(car) === car.lap) this.beginPit(car);
-    car.fuel = Math.max(0, car.fuel - (car.fuelMode === 'eco' ? 1.05 : car.fuelMode === 'push' ? 1.42 : 1.25));
+    car.fuel = Math.max(0, car.fuel - fuelBurnFor(car.fuelMode));
     if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
     if (car.letThrough) {
       car.letThroughLaps--;
@@ -2207,12 +2213,13 @@ export class RaceSim {
     const isSprint = this.kind !== 'race';
     const lapsLeft = this.totalLaps - car.lap;
 
-    // Топливный менеджмент: если не хватает до финиша — экономия
-    if (!isSprint) {
-      const burn = car.fuelMode === 'push' ? 1.42 : car.fuelMode === 'eco' ? 1.05 : 1.25;
-      if (car.fuelMode !== 'eco' && lapsLeft * burn > car.fuel + 2) {
-        car.fuelMode = 'eco';
-        if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} переходит в режим экономии топлива`, 'info');
+    // Топливный менеджмент (и в гонках, и в спринтах): ИИ следит, чтобы топливо не кончилось.
+    // Если на текущем режиме не хватит до финиша — ступенчато снижает (push → normal → eco).
+    if (car.fuelMode !== 'eco') {
+      const burn = fuelBurnFor(car.fuelMode);
+      if (lapsLeft * burn > car.fuel + 1) {
+        car.fuelMode = car.fuelMode === 'push' ? 'normal' : 'eco';
+        if (rnd() < 0.3) this.event(car.lap, `⛽ ${car.code} бережёт топливо — ${car.fuelMode === 'eco' ? 'экономия' : 'стандарт'}`, 'info');
       }
     }
     if (['AW', 'I', 'W'].includes(car.tire)) return;
