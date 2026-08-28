@@ -127,6 +127,7 @@ export interface GameState {
   sponsors: Sponsor[]; ownerTrust: number; fired: boolean;
   lastAdvice: Record<string, string>;  // последние советы пилотов по настройкам (после практик)
   _aiUpdates?: Record<string, string[]>;  // накопленные обновления ИИ-команд к анонсу
+  aiTransfers: { did: string; toTeamId: string }[];  // ИИ-сделки, заключённые в течение сезона (применяются в конце)
 }
 
 export interface TrackGeo {

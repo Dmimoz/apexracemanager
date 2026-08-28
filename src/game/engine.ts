@@ -584,7 +584,7 @@ export function newCareer(seriesId: SeriesId, teamId: string): GameState {
     mods: { puLimitBonus: 0, degMod: 1, drsMod: 1, payMod: 1, capMod: 1 },
     negos: {}, deals: [], staffNegos: {}, staffDeals: [], programs: [],
     sponsors: [], ownerTrust: 60 + Math.round(teams[teamId].reputation * 0.3), fired: false,
-    lastAdvice: {},
+    lastAdvice: {}, aiTransfers: [],
   };
   // настройки по умолчанию для каждого пилота
   for (const t of Object.values(gs.teams)) {
@@ -667,6 +667,92 @@ function aiDevelopment(gs: GameState) {
       gs._aiUpdates[t.id].push(UPG_AREA_NAMES[area]);
     }
   }
+}
+
+/** ИИ-команды активны на трансферном рынке в течение сезона.
+ *  За этап происходит 0–2 сделки — рынок живёт, но не все команды действуют в один день.
+ *  Новость о каждой сделке публикуется СРАЗУ при её заключении; сам переход — в конце сезона. */
+function aiTransferMarket(gs: GameState) {
+  const sid = gs.playerSeries;
+  if (rnd() > 0.65) return;                 // не на каждом этапе что-то происходит
+  const nEvents = rnd() < 0.7 ? 1 : 2;      // 1–2 события за этап
+  for (let i = 0; i < nEvents; i++) aiTransferEvent(gs, sid);
+}
+
+function aiTransferEvent(gs: GameState, sid: SeriesId) {
+  const roll = rnd();
+  if (roll < 0.45) aiRenewContract(gs, sid);
+  else if (roll < 0.8) aiAnnounceTransfer(gs, sid);
+  else aiPromoteJunior(gs, sid);
+}
+
+/** Продление контракта со своим пилотом (применяется сразу) */
+function aiRenewContract(gs: GameState, sid: SeriesId) {
+  const teams = Object.values(gs.teams).filter((t) => t.seriesId === sid && t.id !== gs.playerTeamId);
+  for (const t of shuffleArr(teams)) {
+    const ds = raceDriversOfTeam(gs, t.id).filter((d) => d.contract <= 1 && !d.retiring && !d.willRetire);
+    if (!ds.length) continue;
+    const d = pick(ds);
+    const years = 1 + Math.floor(rnd() * 2);
+    d.contract = years;
+    pushNews(gs, `${t.short}: ${d.name} продлил контракт на ${years} г. — до конца ${gs.year + years}`, 'ТРАНСФЕРЫ');
+    return;
+  }
+}
+
+/** Переход пилота между командами: анонс сразу, переход — в конце сезона */
+function aiAnnounceTransfer(gs: GameState, sid: SeriesId) {
+  const teams = Object.values(gs.teams).filter((t) => t.seriesId === sid && t.id !== gs.playerTeamId);
+  if (teams.length < 2) return;
+  const sorted = [...teams].sort((a, b) => b.reputation - a.reputation);
+  const half = Math.max(1, Math.floor(sorted.length / 2));
+  const fromTeam = pick(sorted.slice(half));         // пилот из нижней половины
+  const toTeam = pick(sorted.slice(0, half));        // получает верхняя
+  if (fromTeam.id === toTeam.id) return;
+  const candidates = raceDriversOfTeam(gs, fromTeam.id).filter((d) => !d.retiring && !d.willRetire);
+  if (!candidates.length) return;
+  const d = pick(candidates);
+  if (gs.aiTransfers.some((t) => t.did === d.id)) return;        // уже анонсирован
+  if (gs.negos[d.id] || gs.deals.some((x) => x.did === d.id)) return; // не мешаем игроку
+  gs.aiTransfers.push({ did: d.id, toTeamId: toTeam.id });
+  pushNews(gs, `📢 ${d.name} подписал контракт с ${toTeam.short} — перейдёт из ${fromTeam.short} после финала сезона`, 'ТРАНСФЕРЫ');
+}
+
+/** Повышение юниора: в Ф1 — из Ф2/Ф3, в других сериях — подписание свободного кокпита */
+function aiPromoteJunior(gs: GameState, sid: SeriesId) {
+  if (sid === 'f1') {
+    const f1teams = Object.values(gs.teams).filter((t) => t.seriesId === 'f1' && t.id !== gs.playerTeamId);
+    if (!f1teams.length) return;
+    const toTeam = [...f1teams].sort((a, b) => a.reputation - b.reputation)[0];
+    const juniors = Object.values(gs.drivers).filter((d) => !d.teamId && !d.seriesId && d.age <= 19);
+    if (!juniors.length) return;
+    const j = [...juniors].sort((a, b) => b.pace - a.pace)[0];
+    if (gs.aiTransfers.some((t) => t.did === j.id) || gs.deals.some((x) => x.did === j.id)) return;
+    gs.aiTransfers.push({ did: j.id, toTeamId: toTeam.id });
+    pushNews(gs, `⭐ ${toTeam.short} подписывает юниора ${j.name} (${j.age} лет) — дебют в Ф1 со следующего сезона`, 'ТРАНСФЕРЫ');
+    return;
+  }
+  // не-Ф1: команда с пустым кокпитом подписывает свободного пилота своей серии (применяется сразу)
+  for (const t of Object.values(gs.teams).filter((x) => x.seriesId === sid && x.id !== gs.playerTeamId)) {
+    if (raceDriversOfTeam(gs, t.id).length >= 2) continue;
+    const free = Object.values(gs.drivers).filter((d) => !d.teamId && d.seriesId === sid);
+    if (!free.length) continue;
+    const d = pick(free);
+    d.teamId = t.id;
+    d.contract = 1;
+    gs.series[sid].dStand[d.id] = gs.series[sid].dStand[d.id] ?? 0;
+    pushNews(gs, `${t.short} подписывает ${d.name} — займёт пустующий кокпит`, 'ТРАНСФЕРЫ');
+    return;
+  }
+}
+
+function shuffleArr<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 /** Публикует анонс: какие обновления команды привезут на следующий уик-энд */
@@ -2566,6 +2652,7 @@ export function applyRace(gs: GameState, sim: RaceSim, stage: Stage) {
     ss.current++;
     tickUpgrades(gs);
     aiDevelopment(gs); // ИИ-команды развивают болиды между этапами
+    aiTransferMarket(gs); // ИИ-команды активны на трансферном рынке (1-2 сделки за этап, не все сразу)
     // уик-энд завершён, но остаётся открытым: игрок видит итоговые результаты и сам уходит в штаб
     w.stageIdx = w.stages.length;
     gs.phase = 'weekend';
@@ -2827,7 +2914,7 @@ function maybeSealDeal(gs: GameState, did: string) {
   if (!n || !n.driverAgreed || !n.feeAgreed) return;
   gs.deals.push({ did, fee: n.feeOffer, salary: n.offerSalary, years: n.offerYears });
   delete gs.negos[did];
-  pushNews(gs, `🤝 СДЕЛКА: ${gs.drivers[did].name} → ${playerTeam(gs).short} после финала сезона`, 'ТРАНСФЕРЫ');
+  pushNews(gs, `🤝 СДЕЛКА: ${gs.drivers[did].name} подписал контракт с ${playerTeam(gs).short} (${money(n.feeOffer)} отступных, ${money(n.offerSalary)}/год, ${n.offerYears} г.) — переход после финала сезона`, 'ТРАНСФЕРЫ');
 }
 
 export function startStaffNego(gs: GameState, sid: string, slotIdx: number): string | null {
@@ -3100,6 +3187,7 @@ export function endSeason(gs: GameState) {
 
   const moves: string[] = [];
   const dealsApplied = applyPlayerDeals(gs, moves);
+  applyAiTransfers(gs, moves); // ИИ-сделки, анонсированные в течение сезона, вступают в силу
 
   // завершающие карьеру уходят
   const retirees = Object.values(gs.drivers).filter((d) => d.retiring);
@@ -3216,6 +3304,37 @@ function applyPlayerDeals(gs: GameState, moves: string[]): string[] {
   gs.negos = {};
   gs.staffNegos = {};
   return out;
+}
+
+/** ИИ-сделки, анонсированные в течение сезона, вступают в силу в конце. */
+function applyAiTransfers(gs: GameState, moves: string[]) {
+  for (const tr of gs.aiTransfers) {
+    const d = gs.drivers[tr.did];
+    const toTeam = gs.teams[tr.toTeamId];
+    if (!d || !toTeam) continue;
+    if (d.retiring) continue;              // передумал — завершает карьеру
+    if (d.teamId === toTeam.id) continue;  // уже там
+    const from = d.teamId ? gs.teams[d.teamId] : null;
+    // если место занято — слабейший пилот получателя освобождает кокпит
+    const seats = raceDriversOfTeam(gs, toTeam.id);
+    if (seats.length >= 2) {
+      const victim = [...seats].sort((a, b) => (a.pace + a.consistency) - (b.pace + b.consistency))[0];
+      victim.teamId = null;
+      moves.push(`${victim.name} освобождает кокпит ${toTeam.short}`);
+    }
+    if (d.seriesId && d.seriesId !== toTeam.seriesId) delete gs.series[d.seriesId].dStand[d.id];
+    d.teamId = toTeam.id;
+    d.seriesId = toTeam.seriesId;
+    d.contract = 1 + Math.floor(rnd() * 2);
+    gs.series[toTeam.seriesId].dStand[d.id] = gs.series[toTeam.seriesId].dStand[d.id] ?? 0;
+    if (toTeam.seriesId === 'f1' && !gs.components[d.id]) {
+      gs.components[d.id] = { ICE: 1, TC: 1, 'MGU-H': 1, 'MGU-K': 1, ES: 1, CE: 1, EX: 1 };
+    }
+    if (toTeam.seriesId === 'f2' || toTeam.seriesId === 'f3') gs.components[d.id] = { ENG: 1 };
+    toTeam.setups[d.id] = defaultSetup();
+    moves.push(`${d.name} переходит в ${toTeam.short}${from ? ` из ${from.short}` : ''}`);
+  }
+  gs.aiTransfers = [];
 }
 
 export function switchPlayerTeam(gs: GameState, teamId: string) {
