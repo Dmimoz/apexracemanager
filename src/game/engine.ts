@@ -656,13 +656,11 @@ function aiFitComponents(gs: GameState, w: Weekend) {
 
 const UPG_AREA_NAMES: Record<string, string> = { aero: 'новое переднее крыло', chassis: 'обновлённое днище', power: 'форсированный мотор', tires: 'улучшенную работу с резиной' };
 
-/** ИИ-команды развивают болиды (только в сериях, где разрешены апгрейды) */
+/** ИИ-команды развивают болиды во ВСЕХ сериях, где разрешены апгрейды (не только в серии игрока) */
 function aiDevelopment(gs: GameState) {
-  const sid = gs.playerSeries;
-  const meta = SERIES_META[sid];
-  if (meta.specCar) return; // единая спецификация — развивать нечего
   for (const t of Object.values(gs.teams)) {
-    if (t.seriesId !== sid || t.id === gs.playerTeamId) continue;
+    if (t.id === gs.playerTeamId) continue;
+    if (SERIES_META[t.seriesId].specCar) continue; // единая спецификация — развивать нечего
     if (rnd() < 0.4) {
       const areas: UpgradeArea[] = t.works ? ['aero', 'chassis', 'power', 'tires'] : ['aero', 'chassis', 'tires'];
       const area = pick(areas);
@@ -675,14 +673,15 @@ function aiDevelopment(gs: GameState) {
   }
 }
 
-/** ИИ-команды активны на трансферном рынке в течение сезона.
- *  За этап происходит 0–2 сделки — рынок живёт, но не все команды действуют в один день.
+/** ИИ-команды активны на трансферном рынке в течение сезона — во ВСЕХ сериях.
+ *  В каждой серии за этап происходит 0–2 сделки — рынок живёт, но не все команды действуют в один день.
  *  Новость о каждой сделке публикуется СРАЗУ при её заключении; сам переход — в конце сезона. */
 function aiTransferMarket(gs: GameState) {
-  const sid = gs.playerSeries;
-  if (rnd() > 0.65) return;                 // не на каждом этапе что-то происходит
-  const nEvents = rnd() < 0.7 ? 1 : 2;      // 1–2 события за этап
-  for (let i = 0; i < nEvents; i++) aiTransferEvent(gs, sid);
+  for (const sid of SERIES_ORDER) {
+    if (rnd() > 0.7) continue;              // в каждой серии событие происходит не на каждом этапе
+    const nEvents = rnd() < 0.7 ? 1 : 2;    // 1–2 события за этап
+    for (let i = 0; i < nEvents; i++) aiTransferEvent(gs, sid);
+  }
 }
 
 function aiTransferEvent(gs: GameState, sid: SeriesId) {
@@ -701,7 +700,7 @@ function aiRenewContract(gs: GameState, sid: SeriesId) {
     const d = pick(ds);
     const years = 1 + Math.floor(rnd() * 2);
     d.contract = years;
-    pushNews(gs, `${t.short}: ${d.name} продлил контракт на ${years} г. — до конца ${gs.year + years}`, 'ТРАНСФЕРЫ');
+    pushNews(gs, `[${SERIES_META[sid].name}] ${t.short}: ${d.name} продлил контракт на ${years} г. — до конца ${gs.year + years}`, 'ТРАНСФЕРЫ');
     return;
   }
 }
@@ -721,7 +720,7 @@ function aiAnnounceTransfer(gs: GameState, sid: SeriesId) {
   if (gs.aiTransfers.some((t) => t.did === d.id)) return;        // уже анонсирован
   if (gs.negos[d.id] || gs.deals.some((x) => x.did === d.id)) return; // не мешаем игроку
   gs.aiTransfers.push({ did: d.id, toTeamId: toTeam.id });
-  pushNews(gs, `📢 ${d.name} подписал контракт с ${toTeam.short} — перейдёт из ${fromTeam.short} после финала сезона`, 'ТРАНСФЕРЫ');
+  pushNews(gs, `📢 [${SERIES_META[sid].name}] ${d.name} подписал контракт с ${toTeam.short} — перейдёт из ${fromTeam.short} после финала сезона`, 'ТРАНСФЕРЫ');
 }
 
 /** Повышение юниора: в Ф1 — из Ф2/Ф3, в других сериях — подписание свободного кокпита */
@@ -735,7 +734,7 @@ function aiPromoteJunior(gs: GameState, sid: SeriesId) {
     const j = [...juniors].sort((a, b) => b.pace - a.pace)[0];
     if (gs.aiTransfers.some((t) => t.did === j.id) || gs.deals.some((x) => x.did === j.id)) return;
     gs.aiTransfers.push({ did: j.id, toTeamId: toTeam.id });
-    pushNews(gs, `⭐ ${toTeam.short} подписывает юниора ${j.name} (${j.age} лет) — дебют в Ф1 со следующего сезона`, 'ТРАНСФЕРЫ');
+    pushNews(gs, `⭐ [Ф1] ${toTeam.short} подписывает юниора ${j.name} (${j.age} лет) — дебют в Ф1 со следующего сезона`, 'ТРАНСФЕРЫ');
     return;
   }
   // не-Ф1: команда с пустым кокпитом подписывает свободного пилота своей серии (применяется сразу)
@@ -747,7 +746,7 @@ function aiPromoteJunior(gs: GameState, sid: SeriesId) {
     d.teamId = t.id;
     d.contract = 1;
     gs.series[sid].dStand[d.id] = gs.series[sid].dStand[d.id] ?? 0;
-    pushNews(gs, `${t.short} подписывает ${d.name} — займёт пустующий кокпит`, 'ТРАНСФЕРЫ');
+    pushNews(gs, `[${SERIES_META[sid].name}] ${t.short} подписывает ${d.name} — займёт пустующий кокпит`, 'ТРАНСФЕРЫ');
     return;
   }
 }
@@ -761,13 +760,22 @@ function shuffleArr<T>(arr: T[]): T[] {
   return a;
 }
 
-/** Публикует анонс: какие обновления команды привезут на следующий уик-энд */
+/** Публикует анонсы обновлений для ВСЕХ серий (а не только серии игрока) */
 export function announceUpdates(gs: GameState) {
-  const sid = gs.playerSeries;
-  if (SERIES_META[sid].specCar) return;
   const ups = gs._aiUpdates ?? {};
-  const names = Object.entries(ups).map(([tid, list]) => `${gs.teams[tid]?.short}: ${(list as string[]).join(', ')}`).slice(0, 4);
-  if (names.length) pushNews(gs, `🔧 Команды привезли обновления на этот уик-энд — ${names.join('; ')}`, 'РАЗВИТИЕ');
+  if (!Object.keys(ups).length) { gs._aiUpdates = {}; return; }
+  // группируем команды по сериям, чтобы анонс был понятен независимо от серии игрока
+  const bySeries: Record<string, string[]> = {};
+  for (const [tid, list] of Object.entries(ups)) {
+    const t = gs.teams[tid];
+    if (!t) continue;
+    const sName = SERIES_META[t.seriesId].name;
+    bySeries[sName] = bySeries[sName] ?? [];
+    bySeries[sName].push(`${t.short}: ${(list as string[]).join(', ')}`);
+  }
+  for (const [sName, entries] of Object.entries(bySeries)) {
+    pushNews(gs, `🔧 [${sName}] Команды привезли обновления на этот уик-энд — ${entries.slice(0, 4).join('; ')}`, 'РАЗВИТИЕ');
+  }
   gs._aiUpdates = {};
 }
 
@@ -1481,6 +1489,7 @@ export interface SimCar {
   lastLap: number | null; bestLap: number | null;
   tire: string; tireAge: number; wear: number; fuel: number; damage: number;
   noiseState: number; // сглаженный шум темпа (случайное блуждание) — плавные отрывы
+  eqDist: number;     // «эквивалентный пробег» со средней скоростью (без осцилляций f) — для стабильных отрывов
   status: 'run' | 'out' | 'fin'; outReason: string; finishT: number;
   legs: TireLeg[]; legIdx: number; pitting: boolean;  // единый детерминированный план
   pendingTire: string | null;
@@ -1564,6 +1573,7 @@ export class RaceSim {
         // стартовый запас топлива под ВЫБРАННЫЙ режим с запасом 12% — ИИ гарантированно доедет
         tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * fuelBurnFor(strat.fuelMode) * 1.12), damage: 0,
         noiseState: 0,
+        eqDist: -i * 14 - (i % 2) * 7, // стартует с тем же разбросом, что и dist
         status: 'run', outReason: '', finishT: 0,
         legs: strat.legs, legIdx: 0, pitting: false,
         pendingTire: null, pendingPitLap: null, pitCrawl: 0, pitLap: false, pitCount: 0,
@@ -1992,8 +2002,10 @@ export class RaceSim {
           const need = target - car.dist;
           speed = Math.max(speed, Math.min(need / dt, crawlCap * f * catchMul));
         }
+        const prevD = car.dist;
         car.dist += speed * dt;
         if (car.dist > target) car.dist = target;
+        car.eqDist += car.dist - prevD; // под SC пелотон сбивается — зеркалим реальную дельту
         prevDist = car.dist;
         while (car.dist - car.lapStartDist >= this.track.total) this.cross(car);
       }
@@ -2011,6 +2023,7 @@ export class RaceSim {
         const f = this.track.factor[idx] / this.track.avgFactor;
         const speed = (this.track.total / car.targetLap) * f * phaseMod;
         car.dist += speed * dt;
+        car.eqDist += (this.track.total / car.targetLap) * dt; // средняя скорость — без осцилляций f
         while (car.dist - car.lapStartDist >= this.track.total) this.cross(car);
       }
     }
@@ -2073,14 +2086,17 @@ export class RaceSim {
     sorted.forEach((car, i) => {
       car.pos = i + 1;
       if (lead && car.status === 'run') {
+        // Отрывы считаем по eqDist (средняя скорость каждой машины) — они НЕ скачут
+        // от мгновенного положения на трассе (прямая/поворот), а плавно отражают чистый темп.
+        const carSpeed = this.track.total / car.targetLap;
         if (inPit(car)) {
           // машина в боксах: отставание = текущее время простоя (реалистично, без аномалий)
-          car.gap = Math.max(0, (lead.dist - car.dist) / leaderSpeed);
+          car.gap = Math.max(0, (lead.eqDist - car.eqDist) / carSpeed);
           car.interval = car.gap;
         } else {
-          car.gap = car === lead ? 0 : Math.max(0, (lead.dist - car.dist) / leaderSpeed);
+          car.gap = car === lead ? 0 : Math.max(0, (lead.eqDist - car.eqDist) / carSpeed);
           const ahead = sorted[i - 1];
-          car.interval = ahead && ahead.status === 'run' && !inPit(ahead) ? Math.max(0, (ahead.dist - car.dist) / leaderSpeed) : car.gap;
+          car.interval = ahead && ahead.status === 'run' && !inPit(ahead) ? Math.max(0, (ahead.eqDist - car.eqDist) / carSpeed) : car.gap;
         }
         // защита от аномально больших отставаний (не более 2 кругов)
         const maxGap = (this.track.total * 2) / leaderSpeed;
@@ -2330,7 +2346,8 @@ export class RaceSim {
         car.targetLap += loss;
         this.event(car.lap, `${car.code} развернуло в повороте (+${loss.toFixed(0)} с)`, 'crash');
       } else if (sev < 0.78) {
-        const others = this.runningSorted().filter((x) => x !== car && Math.abs(x.dist - car.dist) < 60);
+        // машины в боксах (пит-стоп) НЕ могут быть участниками контакта на трассе
+        const others = this.runningSorted().filter((x) => x !== car && !x.pitting && x.pitCrawl <= 0 && Math.abs(x.dist - car.dist) < 60);
         const rival = others.length ? pick(others) : null;
         car.damage = clamp(car.damage + 8 + rnd() * 9, 0, 70);
         car.targetLap += 2.4;

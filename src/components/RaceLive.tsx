@@ -45,9 +45,6 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
   // Отслеживание смены позиций: зелёная ▲ (выиграл) / красная ▼ (потерял) с количеством
   const lastPosRef = useRef<Record<string, number>>({});
   const posDeltasRef = useRef<Record<string, { delta: number; ts: number }>>({});
-  // Плавное отображение отрывов: сглаженное значение «перетекает» к актуальному каждый кадр,
-  // поэтому цифры не скачут резко, а меняются постепенно
-  const displayIntervalRef = useRef<Record<string, number>>({});
 
   // Подвести итоги — только по клику игрока (не выкидываем из трансляции автоматически)
   const finish = () => {
@@ -143,16 +140,6 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
       }
     }
     if (car.status === 'run') lastPosRef.current[car.did] = car.pos;
-
-    // плавный отрыв: на каждом кадре «подтягиваем» отображаемое значение к актуальному,
-    // вместо того чтобы резко показывать новое число
-    if (onTrack && car.pos !== 1) {
-      const target = car.interval;
-      const shown = displayIntervalRef.current[car.did];
-      displayIntervalRef.current[car.did] = shown == null ? target : shown + (target - shown) * 0.28;
-    } else {
-      delete displayIntervalRef.current[car.did]; // в боксах/сходах/лидер — без сглаживания
-    }
   }
 
   return (
@@ -260,7 +247,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                       : inPit ? <span className="text-[#ffc94d]">В БОКСАХ</span>
                       : car.status === 'fin'
                         ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
-                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval >= 90 ? `+${Math.floor(car.interval / 60)}:${(car.interval % 60).toFixed(3).padStart(6, '0')}` : `+${(displayIntervalRef.current[car.did] ?? car.interval).toFixed(3)}`}
+                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval >= 90 ? `+${Math.floor(car.interval / 60)}:${(car.interval % 60).toFixed(3).padStart(6, '0')}` : `+${car.interval.toFixed(3)}`}
                   </span>
                   <span className={`num w-[86px] text-right text-[13px] ${isPurple ? 'text-[#c884ff] font-bold' : 'text-[#7f8da0]'}`}>
                     {car.lastLap != null ? fmtLap(car.lastLap) : '—'}
