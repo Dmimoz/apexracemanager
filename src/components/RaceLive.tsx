@@ -202,6 +202,10 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
             <span className="text-[10px] uppercase tracking-[0.2em] text-[#7f8da0] font-semibold">Тайминг · отрывы</span>
             <span className="text-[9px] text-[#5a6a80]">отрыв | посл. круг</span>
           </div>
+          <div className="px-3 py-1 border-b border-[#1d242f] flex items-center gap-3 shrink-0 text-[9px] text-[#5a6a80]">
+            <span className="flex items-center gap-1"><span className="font-disp font-bold text-[#141a10] bg-[#ff9f43] px-1 rounded-sm">+5s</span> секундный — отбудется на пит-стопе</span>
+            <span className="flex items-center gap-1"><span className="font-disp font-bold text-[#ff6b4b] border border-[#ff6b4b66] px-1 rounded-sm">−3⊞</span> на стартовую решётку след. гонки</span>
+          </div>
           <div className="flex-1 overflow-y-auto">
             {cars.map((car) => {
               const team = gs.teams[car.tid];
@@ -229,6 +233,20 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                   {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm shrink-0" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
                   {car.drs && <span className="font-disp text-[9px] font-bold text-[#4ade80]">DRS</span>}
                   {car.pitting && <span className="font-disp text-[9px] font-bold text-[#ffc94d] blink">PIT</span>}
+                  {(() => {
+                    const penSec = car.penQueue.reduce((a, b) => a + b, 0);
+                    const gridPen = gs.nextRoundPen[car.did] ?? 0;
+                    return (<>
+                      {penSec > 0 && (
+                        <span className="font-disp text-[9px] font-bold text-[#141a10] bg-[#ff9f43] px-1 rounded-sm shrink-0 blink"
+                          title={`Секундный штраф +${penSec} с — будет отбыт на пит-стопе`}>+{penSec}s</span>
+                      )}
+                      {gridPen > 0 && (
+                        <span className="font-disp text-[9px] font-bold text-[#ff6b4b] border border-[#ff6b4b66] px-1 rounded-sm shrink-0"
+                          title={`Штраф −${gridPen} поз. на стартовой решётке следующей гонки`}>−{gridPen}⊞</span>
+                      )}
+                    </>);
+                  })()}
                   {(() => {
                     const pd = posDeltasRef.current[car.did];
                     const show = pd && nowMs - pd.ts < 4000 && pd.delta !== 0 && car.status === 'run' && !car.pitting && car.pitCrawl <= 0;
