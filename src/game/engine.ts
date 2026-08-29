@@ -977,7 +977,7 @@ export interface SessionCar {
   flagged: boolean;                // доехал последний круг после истечения времени (🏁 в таблице)
 }
 
-interface Segment { name: string; simClock: number; realMin: number; cutoff: number; cars?: string[] }
+interface Segment { name: string; simClock: number; realMin: number; cutoff: number; cars?: string[]; duel?: boolean }
 
 /** Реальные форматы сессий по сериям: FP / квалификация / спринт-квалификация */
 /** Реальные форматы сессий. simClock — в тех же секундах, что и время круга (1 сим-сек = 1 сек),
@@ -996,7 +996,19 @@ function buildSegments(sid: SeriesId, kind: 'practice' | 'quali' | 'sq'): Segmen
   if (kind === 'quali' && f1) {
     return [seg('Q1', 18, 5), seg('Q2', 15, 5), seg('Q3', 12, 0)];
   }
-  return [seg('QUALI', sid === 'fe' ? 32 : 30, 0)];
+  if (kind === 'quali' && sid === 'fe') {
+    // Реальный формат Формулы Е: две группы по 12 минут, затем плей-офф дуэлей.
+    // Составы дуэлей заполняются по ходу (после групп и каждой стадии).
+    const duel = (name: string): Segment => ({ name, simClock: 3.5 * 60, realMin: 3.5, cutoff: 0, duel: true, cars: [] });
+    return [
+      seg('Группа A', 12, 0),
+      seg('Группа B', 12, 0),
+      duel('1/4 финала 1'), duel('1/4 финала 2'), duel('1/4 финала 3'), duel('1/4 финала 4'),
+      duel('1/2 финала 1'), duel('1/2 финала 2'),
+      duel('Финал'),
+    ];
+  }
+  return [seg('QUALI', 30, 0)];
 }
 
 export class SessionSim {
@@ -1017,6 +1029,10 @@ export class SessionSim {
   awaitingConfirm = false;   // все круги доезжены — ждём подтверждения игрока
   events: { lap: number; text: string; kind: string }[] = [];
   playerSetup: Setup;
+  /* --- Формула Е: дуэльная квалификация --- */
+  duelWinners: Record<string, string> = {};   // имя дуэльного сегмента -> did победителя
+  feGroupA: string[] = [];                    // did группы A (нечётные места в зачёте)
+  feGroupB: string[] = [];                    // did группы B (чётные места в зачёте)
 
   constructor(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wetSession: boolean, startTires?: Record<string, string>) {
     this.gs = gs;
@@ -1063,6 +1079,16 @@ export class SessionSim {
       if (!this.wetSession && isPlayer && startTires?.[did]) car.tire = startTires[did];
       if (this.wetSession) car.tire = sid === 'fe' ? 'AW' : 'I';
     });
+    // Формула Е: делим пелотон на группы A/B по чётным/нечётным местам личного зачёта
+    if (kind === 'quali' && sid === 'fe') {
+      const ss = gs.series[sid];
+      const rankedAll = [...this.cars].sort((a, b) => (ss.dStand[b.did] ?? 0) - (ss.dStand[a.did] ?? 0) || b.perf - a.perf);
+      this.feGroupA = rankedAll.filter((_, i) => i % 2 === 0).map((c) => c.did);
+      this.feGroupB = rankedAll.filter((_, i) => i % 2 === 1).map((c) => c.did);
+      this.segments[0].cars = this.feGroupA;
+      this.segments[1].cars = this.feGroupB;
+      this.event(0, `Дуэльная квалификация: Группа A (${this.feGroupA.length}) и Группа B (${this.feGroupB.length})`);
+    }
     this.event(0, kind === 'practice' ? 'Зелёный свет — практика началась' : `Зелёный свет — ${this.segment}`);
   }
 
@@ -1122,7 +1148,9 @@ export class SessionSim {
       }
     }
     const seg0 = this.segments[this.segIdx].simClock;
-    const segCars = this.segments[this.segIdx].cars;
+    const curSeg = this.segments[this.segIdx];
+    const segCars = curSeg.cars;
+    const isDuel = !!curSeg.duel;
     for (const car of this.cars) {
       if (car.state === 'elim' || car.state === 'done') { car.status = 'park'; continue; }
       // Формула Е: в каждом сегменте (группа/дуэль) едут только отведённые ему машины
@@ -1130,20 +1158,24 @@ export class SessionSim {
       if (car.state === 'garage') {
         car.status = 'park';
         if (this.clockExpired) continue; // после истечения времени новых выездов нет
-        // машины игрока выезжают ТОЛЬКО по его команде; ИИ — по своему таймеру
-        const mayExit = car.manual ? car.playerOut : this.t >= car.exitAt;
+        // в дуэли едут все автоматически и ровно один раз (повторный выезд после круга запрещён);
+        // иначе игрок — вручную, ИИ — по таймеру
+        const mayExit = isDuel
+          ? (car.segBest[curSeg.name] == null && this.t >= car.exitAt)
+          : (car.manual ? car.playerOut : this.t >= car.exitAt);
         if (mayExit && this.clock > seg0 * 0.05) {
           car.state = 'flying';
           car.phase2 = 'out';
           car.pushed = 0;
           car.boxNext = false;
           car.playerOut = false;
+          car.runLen = isDuel ? 1 : car.runLen;   // дуэль = ровно 1 быстрый круг
           car.dist = -((car.pos % 5) * 12) - 6;
           car.lapStartT = this.t;
           car.lapStartDist = car.dist;
           car.targetLap = this.sessionLap(car);
           car.status = 'run';
-          if (car.manual) this.event(0, `${car.code} выезжает из боксов`);
+          if (car.manual && !isDuel) this.event(0, `${car.code} выезжает из боксов`);
         }
         continue;
       }
@@ -1155,6 +1187,23 @@ export class SessionSim {
     }
     const onTrack = this.cars.filter((c) => c.state === 'flying').sort((a, b) => b.dist - a.dist);
     onTrack.forEach((c, i) => { c.pos = i + 1; });
+
+    // Формула Е: дуэль завершена, как только оба пилота проехали свой круг и вернулись —
+    // переходим дальше сразу, не дожидаясь конца отведённого времени.
+    // Если это последняя дуэль (Финал) — сессия окончена, ждём подтверждения игрока.
+    if (isDuel && segCars && segCars.length === 2) {
+      const duelists = segCars.map((id) => this.cars.find((c) => c.did === id)).filter(Boolean) as SessionCar[];
+      const allDone = duelists.length === 2 && duelists.every((c) => c.segBest[curSeg.name] != null && c.state !== 'flying');
+      if (allDone) {
+        if (this.segIdx >= this.segments.length - 1) {
+          this.awaitingConfirm = true;
+          this.event(0, '🏁 Финал завершён — подтвердите результаты квалификации');
+        } else {
+          this.advanceSegment();
+        }
+        return;
+      }
+    }
 
     // время истекло: когда все машины доехали и вернулись в боксы —
     // либо переходим в следующий сегмент (квал), либо ждём подтверждения игрока
@@ -1297,12 +1346,31 @@ export class SessionSim {
   /** Завершить сегмент (отсев в квал) и перейти к следующему. Вызывается, когда все доездили. */
   advanceSegment() {
     const seg = this.segments[this.segIdx];
+    // --- Формула Е: фиксация результата дуэли ---
+    if (seg.duel && seg.cars && seg.cars.length === 2) {
+      const [aId, bId] = seg.cars;
+      const a = this.cars.find((c) => c.did === aId);
+      const b = this.cars.find((c) => c.did === bId);
+      const ta = a?.segBest[seg.name] ?? Infinity;
+      const tb = b?.segBest[seg.name] ?? Infinity;
+      const winner = ta <= tb ? a : b;
+      if (winner) {
+        this.duelWinners[seg.name] = winner.did;
+        const loser = winner === a ? b : a;
+        this.event(0, `⚔ ${seg.name}: ${winner.code} быстрее ${loser?.code ?? '—'} (${fmtLap(ta === Infinity ? tb : ta)}) — проходит дальше`);
+      }
+    }
+    // --- Формула Е: после групп формируем четвертьфиналы (1–4, 2–3 внутри группы) ---
+    if (seg.name === 'Группа B') this.fillFeQuarterfinals();
+    // --- Формула Е: заполняем следующую дуэль, когда известны оба победителя её источников ---
+    this.fillFeNextDuel(seg.name);
+
     if (seg.cutoff > 0) {
       const ranked = this.ranked().filter((c) => c.state !== 'elim');
       const out = ranked.slice(ranked.length - seg.cutoff);
       for (const car of out) { car.state = 'elim'; car.eliminatedIn = seg.name; car.status = 'park'; }
       this.event(0, `${seg.name} завершён — выбывают: ${out.map((c) => c.code).join(', ')}`);
-    } else {
+    } else if (!seg.duel) {
       this.event(0, `${seg.name} завершён`);
     }
     this.segIdx++;
@@ -1310,14 +1378,57 @@ export class SessionSim {
     this.segment = next.name;
     this.clock = next.simClock;
     this.clockExpired = false;
+    const nextIsDuel = !!next.duel;
     for (const car of this.cars) {
       if (car.state === 'elim' || car.state === 'done') continue;
       car.state = 'garage';
-      car.exitAt = this.t + (car.manual ? 0 : (0.04 + rnd() * 0.2) * next.simClock);
+      // в дуэли участники стартуют почти сразу; в группах/квале — как обычно
+      const inNextDuel = nextIsDuel && next.cars?.includes(car.did);
+      car.exitAt = this.t + (inNextDuel ? (2 + rnd() * 6) : (car.manual ? 0 : (0.04 + rnd() * 0.2) * next.simClock));
       delete car.segBest[next.name];
       if (car.manual) { car.stayBoxed = true; car.playerOut = false; car.boxNext = false; }
     }
     this.event(0, `Зелёный свет — ${next.name}`);
+  }
+
+  /** Формула Е: топ-4 каждой группы → четвертьфиналы (1v4, 2v3). */
+  fillFeQuarterfinals() {
+    const top4 = (group: string[], groupName: string): SessionCar[] =>
+      group
+        .map((id) => this.cars.find((c) => c.did === id))
+        .filter((c): c is SessionCar => !!c)
+        .sort((a, b) => (a.segBest[groupName] ?? 1e9) - (b.segBest[groupName] ?? 1e9))
+        .slice(0, 4);
+    const A = top4(this.feGroupA, 'Группа A');
+    const B = top4(this.feGroupB, 'Группа B');
+    const byName = (name: string) => this.segments.find((s) => s.name === name);
+    const set = (name: string, a?: SessionCar, b?: SessionCar) => {
+      const s = byName(name);
+      if (s && a && b) s.cars = [a.did, b.did];
+    };
+    set('1/4 финала 1', A[0], A[3]);
+    set('1/4 финала 2', A[1], A[2]);
+    set('1/4 финала 3', B[0], B[3]);
+    set('1/4 финала 4', B[1], B[2]);
+    this.event(0, `Топ-4 групп вышли в 1/4 финала: ${[...A, ...B].map((c) => c.code).join(', ')}`);
+  }
+
+  /** Формула Е: когда известны победители обеих дуэлей-источников, заполняем целевую дуэль. */
+  fillFeNextDuel(justFinished: string) {
+    const FEED: Record<string, [string, string]> = {
+      '1/2 финала 1': ['1/4 финала 1', '1/4 финала 2'],
+      '1/2 финала 2': ['1/4 финала 3', '1/4 финала 4'],
+      'Финал': ['1/2 финала 1', '1/2 финала 2'],
+    };
+    for (const [target, feeders] of Object.entries(FEED)) {
+      if (!feeders.includes(justFinished)) continue;
+      const w1 = this.duelWinners[feeders[0]];
+      const w2 = this.duelWinners[feeders[1]];
+      if (w1 && w2) {
+        const s = this.segments.find((x) => x.name === target);
+        if (s) s.cars = [w1, w2];
+      }
+    }
   }
 
   /** Игрок подтвердил завершение сессии (после того как все доездили последние круги) */
@@ -1397,6 +1508,72 @@ export class SessionSim {
     this.playerSetup[field] = car.setup[field];
     setDriverSetup(gs, did, field, value);
   }
+
+  /** Формула Е: проигравший в дуэли и его время круга. */
+  private loserOf(segName: string): { loser?: SessionCar; time: number } {
+    const seg = this.segments.find((s) => s.name === segName);
+    if (!seg?.cars || seg.cars.length !== 2) return { time: Infinity };
+    const winner = this.duelWinners[segName];
+    const loserId = seg.cars.find((id) => id !== winner);
+    const loser = this.cars.find((c) => c.did === loserId);
+    return { loser, time: loser?.segBest[segName] ?? Infinity };
+  }
+
+  /** Формула Е: итоговый порядок стартовой решётки по результатам дуэлей.
+   *  P1 — победитель финала, P2 — проигравший финал;
+   *  P3–P4 — проигравшие в полуфиналах (по времени); P5–P8 — проигравшие в 1/4 (по времени);
+   *  далее — не прошедшие: группа победителя финала занимает нечётные места (9,11,13…),
+   *  вторая группа — чётные (10,12,14…), внутри — по времени в группе. */
+  buildFEQualiOrder(): string[] {
+    const order: string[] = [];
+    const finalSeg = this.segments.find((s) => s.name === 'Финал');
+    const finalWinner = this.duelWinners['Финал'];
+    const finalLoserId = finalSeg?.cars?.find((id) => id !== finalWinner);
+    if (finalWinner) order.push(finalWinner);
+    if (finalLoserId) order.push(finalLoserId);
+
+    const sfLosers = ['1/2 финала 1', '1/2 финала 2'].map((n) => this.loserOf(n)).filter((x) => x.loser);
+    sfLosers.sort((a, b) => a.time - b.time);
+    for (const x of sfLosers) order.push(x.loser!.did);
+
+    const qfLosers = ['1/4 финала 1', '1/4 финала 2', '1/4 финала 3', '1/4 финала 4'].map((n) => this.loserOf(n)).filter((x) => x.loser);
+    qfLosers.sort((a, b) => a.time - b.time);
+    for (const x of qfLosers) order.push(x.loser!.did);
+
+    const qualified = new Set(order);
+    const winnerGroupIsA = this.feGroupA.includes(finalWinner ?? '');
+    const oddGroup = winnerGroupIsA ? this.feGroupA : this.feGroupB;   // нечётные места (9,11,13…)
+    const evenGroup = winnerGroupIsA ? this.feGroupB : this.feGroupA;  // чётные места (10,12,14…)
+    const groupTime = (c: SessionCar) => c.segBest['Группа A'] ?? c.segBest['Группа B'] ?? 1e9;
+    const rest = (g: string[]) => g
+      .map((id) => this.cars.find((c) => c.did === id))
+      .filter((c): c is SessionCar => !!c && !qualified.has(c.did))
+      .sort((a, b) => groupTime(a) - groupTime(b));
+    const odds = rest(oddGroup);
+    const evens = rest(evenGroup);
+    for (let i = 0; i < Math.max(odds.length, evens.length); i++) {
+      if (odds[i]) order.push(odds[i].did);
+      if (evens[i]) order.push(evens[i].did);
+    }
+    return order;
+  }
+
+  /** Формула Е: самая глубокая стадия пилота и его время на ней (для протокола). */
+  feDriverResult(did: string): { label: string; time: number | null } {
+    const car = this.cars.find((c) => c.did === did);
+    if (!car) return { label: '—', time: null };
+    const duels = ['Финал', '1/2 финала 1', '1/2 финала 2', '1/4 финала 1', '1/4 финала 2', '1/4 финала 3', '1/4 финала 4'];
+    for (const name of duels) {
+      const seg = this.segments.find((s) => s.name === name);
+      if (seg?.cars?.includes(did) && car.segBest[name] != null) {
+        const won = this.duelWinners[name] === did;
+        return { label: `${won ? 'победа' : 'поражение'} · ${name}`, time: car.segBest[name] };
+      }
+    }
+    const group = this.feGroupA.includes(did) ? 'Группа A' : this.feGroupB.includes(did) ? 'Группа B' : null;
+    if (group) return { label: group, time: car.segBest[group] ?? null };
+    return { label: '—', time: car.bestLap };
+  }
 }
 
 export function makeSessionSim(gs: GameState, kind: 'practice' | 'quali' | 'sq', grid: string[], circuit: Circuit, wet: boolean, startTires?: Record<string, string>): SessionSim {
@@ -1455,16 +1632,19 @@ function applyQualiSim(gs: GameState, sim: SessionSim, stage: Stage) {
   const meta = SERIES_META[sid];
   const rows = sessionRows(sim);
   const notes: string[] = [];
+  // для ФЕ порядок определяется дуэлями, для остальных — лучшим кругом
+  const baseOrder = stage === 'quali' && sid === 'fe' ? sim.buildFEQualiOrder() : rows.map((r) => r.did);
   if (sid === 'f1') notes.push('Формат: Q1 (−5) → Q2 (−5) → Q3 — по лучшему кругу. Парк-ферме действует с начала сессии');
+  else if (sid === 'fe' && stage === 'quali') notes.push('Дуэльная квалификация: группы A/B, 1/4, 1/2 и финал');
   else notes.push('Зачёт по лучшему кругу сессии');
-  if (stage === 'quali' && meta.polePoints > 0 && rows[0]) {
-    const pole = gs.drivers[rows[0].did];
+  if (stage === 'quali' && meta.polePoints > 0 && baseOrder[0]) {
+    const pole = gs.drivers[baseOrder[0]];
     ss.dStand[pole.id] = (ss.dStand[pole.id] ?? 0) + meta.polePoints;
     if (pole.teamId) ss.tStand[pole.teamId] = (ss.tStand[pole.teamId] ?? 0) + meta.polePoints;
     notes.push(`${pole.name}: +${meta.polePoints} очк. за поул`);
   }
   if (stage === 'quali') {
-    const order = rows.map((r) => r.did);
+    const order = baseOrder.filter((id, i) => baseOrder.indexOf(id) === i);
     const res = applyGridPenalties(gs, w, order);
     w.qualiGrid = res.grid;
     w.pitStart = res.pitStart;
@@ -1473,11 +1653,28 @@ function applyQualiSim(gs: GameState, sim: SessionSim, stage: Stage) {
       if (places <= 0) continue;
       const d = gs.drivers[did];
       if (!d) continue;
-      if (res.pitStart.includes(did)) notes.push(`⊞ ${d.name}: старт с пит-лейна (штраф ${places} поз.)`);
-      else notes.push(`⊞ ${d.name}: −${places} поз. на стартовой решётке`);
+      notes.push(`⊞ ${d.name}: −${places} поз. на стартовой решётке`);
     }
+    if (sid === 'fe') notes.push('Решётка — по итогам дуэлей: победитель финала на поуле, проигравшие — по временам');
     notes.push('Стартовая решётка сформирована с учётом штрафов за СУ и инциденты');
-    w.results[stage] = { stage, title: stageTitle(gs, stage), rows, notes };
+    // протокол ФЕ перестраиваем в порядке решётки; время — из самой глубокой стадии
+    let feRows: TableRow[] = rows;
+    if (sid === 'fe') {
+      feRows = [];
+      order.forEach((id, i) => {
+        const base = rows.find((r) => r.did === id);
+        if (!base) return;
+        const info = sim.feDriverResult(id);
+        feRows.push({
+          pos: i + 1, did: base.did, tid: base.tid,
+          display: info.time != null ? fmtLap(info.time) : base.display,
+          points: 0,
+          best: info.time != null ? fmtLap(info.time) : base.best ?? null,
+          note: info.label,
+        });
+      });
+    }
+    w.results[stage] = { stage, title: stageTitle(gs, stage), rows: feRows, notes };
   } else {
     w.results[stage] = { stage, title: 'Спринт-квалификация', rows, notes };
   }
