@@ -1459,6 +1459,14 @@ function applyQualiSim(gs: GameState, sim: SessionSim, stage: Stage) {
     const res = applyGridPenalties(gs, w, order);
     w.qualiGrid = res.grid;
     w.pitStart = res.pitStart;
+    // пометки о штрафах в протокол
+    for (const [did, places] of Object.entries(w.pendingGrid)) {
+      if (places <= 0) continue;
+      const d = gs.drivers[did];
+      if (!d) continue;
+      if (res.pitStart.includes(did)) notes.push(`⊞ ${d.name}: старт с пит-лейна (штраф ${places} поз.)`);
+      else notes.push(`⊞ ${d.name}: −${places} поз. на стартовой решётке`);
+    }
     notes.push('Стартовая решётка сформирована с учётом штрафов за СУ и инциденты');
     w.results[stage] = { stage, title: stageTitle(gs, stage), rows, notes };
   } else {

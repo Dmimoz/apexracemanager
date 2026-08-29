@@ -46,6 +46,12 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
   // парк-ферме: с начала квалификации (её результат уже есть) и до конца уик-энда
   const setupLocked = pastStages.some((s) => s === 'quali' || s === 'sq');
 
+  // штрафы стартовой решётки для таблицы квалификации: −N позиций / старт с пит-лейна
+  const qualiPens: Record<string, { places: number; pit: boolean }> = {};
+  for (const [did, places] of Object.entries(w.pendingGrid)) {
+    if (places > 0) qualiPens[did] = { places, pit: w.pitStart.includes(did) };
+  }
+
   // ---- УИК-ЭНД ЗАВЕРШЁН: итоги всех сессий + кнопка в штаб ----
   if (over) {
     return (
@@ -70,7 +76,7 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
                   <div key={st}>
                     <div className="font-disp text-[11px] font-bold tracking-[0.18em] text-[#9fb0c4] mb-2 uppercase">{r.title}</div>
                     {r.notes.map((n, i) => <div key={i} className="text-[12px] text-[#7f8da0] mb-1">· {n}</div>)}
-                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} />
+                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} pens={st === 'quali' ? qualiPens : undefined} />
                   </div>
                 );
               })}
@@ -288,7 +294,7 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
                   <div key={st}>
                     <div className="font-disp text-[11px] font-bold tracking-[0.18em] text-[#9fb0c4] mb-2 uppercase">{r.title}</div>
                     {r.notes.map((n, i) => <div key={i} className="text-[12px] text-[#7f8da0] mb-1">· {n}</div>)}
-                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} />
+                    <ResultTable rows={r.rows} game={gs} showBest={st !== 'race' && st !== 'sprint' && st !== 'sprintRev'} showPts={(st === 'race' || st === 'sprint' || st === 'sprintRev')} pens={st === 'quali' ? qualiPens : undefined} />
                   </div>
                 );
               })}
