@@ -227,7 +227,21 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                     style={{ borderColor: tire.color, background: `${tire.color}33` }}>
                     <span className="absolute inset-[3px] rounded-full" style={{ background: `conic-gradient(${wearCol} ${wear * 3.6}deg, transparent 0)` }} />
                   </span>
-                  <span className="num text-[10px] font-bold w-9 text-right" style={{ color: wearCol }} title={`Износ шин ${wear}%`}>{isOut ? '' : `${wear}%`}</span>
+                  {car.isFE ? (
+                    <>
+                      <span className="w-4 h-4 shrink-0 rounded-full border-2 relative" title={`Заряд энергии ${car.fuel.toFixed(1)}%`}
+                        style={{ borderColor: '#4c7dff', background: '#4c7dff22' }}>
+                        <span className="absolute inset-[3px] rounded-full" style={{ background: `conic-gradient(${car.fuel > 40 ? '#4c7dff' : car.fuel > 15 ? '#ffc94d' : '#ff6b4b'} ${car.fuel * 3.6}deg, transparent 0)` }} />
+                      </span>
+                      <span className="num text-[10px] font-bold w-11 text-right" style={{ color: car.fuel > 40 ? '#4c7dff' : car.fuel > 15 ? '#ffc94d' : '#ff6b4b' }} title={`Заряд энергии ${car.fuel.toFixed(1)}%`}>{isOut ? '' : `${car.fuel.toFixed(1)}%`}</span>
+                      {sim.attackRemaining(car) > 0 && (
+                        <span className="font-disp text-[9px] font-bold text-[#c884ff] border border-[#c884ff66] px-1 rounded-sm shrink-0 blink"
+                          title={`Режим атаки: ещё ${Math.ceil(sim.attackRemaining(car))} с`}>⚡{Math.ceil(sim.attackRemaining(car))}с</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="num text-[10px] font-bold w-9 text-right" style={{ color: wearCol }} title={`Износ шин ${wear}%`}>{isOut ? '' : `${wear}%`}</span>
+                  )}
                   <span className="font-bold w-12">{car.code}</span>
                   <span className="text-[#5a6a80] truncate flex-1 text-[12px]">{team.short}</span>
                   {car.pitCount > 0 && <span className="font-disp text-[9px] font-bold text-[#5c9eff] border border-[#5c9eff55] px-1 rounded-sm shrink-0" title={`Пит-стопов: ${car.pitCount}`}>P{car.pitCount}</span>}
@@ -295,6 +309,51 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                 const fuelLeft = car.fuel - lapsLeft * burn;
                 const fuelOk = fuelLeft >= 0;
                 const fuelPct = Math.min(100, Math.max(0, (car.fuel / (sim.totalLaps * 1.575)) * 100));
+
+                /* ---- ФОРМУЛА Е: энергия + режим атаки (без топлива и износа шин) ---- */
+                if (car.isFE) {
+                  const atkLeft = sim.attackRemaining(car);
+                  const eCol = car.fuel > 40 ? '#4c7dff' : car.fuel > 15 ? '#ffc94d' : '#ff6b4b';
+                  const eProj = car.fuel - lapsLeft * sim.energyPerLap(car);
+                  const eOk = eProj >= 0;
+                  return (
+                    <div key={car.did} className="border border-[#2a3442] bg-[#10151d] px-3 py-2">
+                      <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                        <FlagTag nat={car.nat} />
+                        <span className="font-bold text-[13px]">{car.code}</span>
+                        <span className="text-[11px] text-[#7f8da0]">P{car.pos}</span>
+                        <span className="ml-auto text-[10px] num font-bold" style={{ color: eCol }}>⚡ {car.fuel.toFixed(1)}%</span>
+                      </div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[9px] uppercase tracking-widest text-[#7f8da0] w-14 shrink-0">Энергия</span>
+                        <div className="flex-1 h-[8px] bg-[#0d1117] border border-[#232b37] overflow-hidden">
+                          <div className="h-full transition-all duration-300" style={{ width: `${car.fuel}%`, background: `linear-gradient(90deg, ${eCol}88, ${eCol})` }} />
+                        </div>
+                        <span className="num text-[10px] font-bold w-[86px] text-right" style={{ color: eOk ? '#4c7dff' : '#ff6b4b' }}
+                          title={`Прогноз на финише: ${eProj.toFixed(1)}% (осталось ${lapsLeft} кругов)`}>
+                          {car.status === 'run' ? (eOk ? `к финишу ${eProj.toFixed(1)}%` : `не хватит ${Math.abs(eProj).toFixed(1)}%!`) : '—'}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase tracking-widest text-[#7f8da0] mr-1">Режим:</span>
+                        {([['eco', 'ЭКОНОМИЯ'], ['normal', 'СТАНДАРТ']] as const).map(([f, label]) => (
+                          <button key={f} onClick={() => { sim.setFuelMode(car.did, f); force((x) => x + 1); }}
+                            disabled={car.status !== 'run'}
+                            className={`px-2 py-0.5 text-[10px] font-bold border transition-colors disabled:opacity-30 ${car.fuelMode === f ? 'bg-[#5c9eff] text-[#0d1016] border-[#5c9eff]' : 'border-[#2a3442] text-[#9fb0c4] hover:border-[#5a6a80]'}`}>
+                            {label}
+                          </button>
+                        ))}
+                        <button onClick={() => { sim.playerActivateAttack(car.did); force((x) => x + 1); }}
+                          disabled={car.attackUsed || car.status !== 'run'}
+                          className={`px-2 py-0.5 text-[10px] font-bold border transition-colors disabled:opacity-40 ${atkLeft > 0 ? 'bg-[#c884ff] text-[#12101a] border-[#c884ff] blink' : car.attackUsed ? 'border-[#2a3442] text-[#5a6a80]' : 'border-[#c884ff] text-[#c884ff] hover:bg-[#c884ff22]'}`}>
+                          {atkLeft > 0 ? `⚡ АТАКА ${Math.ceil(atkLeft)}с` : car.attackUsed ? '⚡ АТАКА ИСПОЛЬЗОВАНА' : '⚡ РЕЖИМ АТАКИ'}
+                        </button>
+                      </div>
+                      <div className="text-[9px] text-[#5a6a80] mt-1">Режим атаки — строго 1 раз за гонку: сейчас −2 с, затем 8 мин темп на 3% выше и расход энергии +3%.</div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={car.did} className="border border-[#2a3442] bg-[#10151d] px-3 py-2">
                     <div className="flex items-center gap-2 flex-wrap mb-1.5">

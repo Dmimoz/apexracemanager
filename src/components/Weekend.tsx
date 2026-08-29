@@ -47,9 +47,9 @@ export default function WeekendScreen({ onStartSession, startTires, setStartTire
   const setupLocked = pastStages.some((s) => s === 'quali' || s === 'sq');
 
   // штрафы стартовой решётки для таблицы квалификации: −N позиций / старт с пит-лейна
-  const qualiPens: Record<string, { places: number; pit: boolean }> = {};
+  const qualiPens: Record<string, { places: number }> = {};
   for (const [did, places] of Object.entries(w.pendingGrid)) {
-    if (places > 0) qualiPens[did] = { places, pit: w.pitStart.includes(did) };
+    if (places > 0) qualiPens[did] = { places };
   }
 
   // ---- УИК-ЭНД ЗАВЕРШЁН: итоги всех сессий + кнопка в штаб ----

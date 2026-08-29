@@ -812,21 +812,27 @@ export function gridForStage(gs: GameState, stage: Stage): string[] {
   return w.qualiGrid;
 }
 
+/** Штрафы решётки: сдвиг вниз на N позиций. Если штраф больше оставшихся мест —
+ *  пилот стартует последним; несколько таких выстраиваются по времени квалификации
+ *  (лучшее время — выше). Старт с пит-лейна не применяется. */
 export function applyGridPenalties(gs: GameState, w: Weekend, qualiOrder: string[]) {
   const grid = [...qualiOrder];
-  const pitStart: string[] = [];
+  const dropped: string[] = [];
   const penalized = Object.entries(w.pendingGrid)
     .filter(([did, p]) => p > 0 && grid.includes(did))
     .sort((a, b) => b[1] - a[1]);
   for (const [did, places] of penalized) {
     const idx = grid.indexOf(did);
     grid.splice(idx, 1);
-    let to = idx + places;
-    if (to >= grid.length + 1 || places >= 16) { pitStart.push(did); to = grid.length; }
-    grid.splice(Math.min(to, grid.length), 0, did);
+    const to = idx + places;
+    if (to >= grid.length) dropped.push(did);
+    else grid.splice(to, 0, did);
   }
+  // стартующие с конца — в порядке времени квалификации (лучший — выше)
+  dropped.sort((a, b) => qualiOrder.indexOf(a) - qualiOrder.indexOf(b));
+  grid.push(...dropped);
   void gs;
-  return { grid, pitStart };
+  return { grid, pitStart: [] as string[] };
 }
 
 /* -------- мгновенный (скип) расчёт сессий -------- */
@@ -971,7 +977,7 @@ export interface SessionCar {
   flagged: boolean;                // доехал последний круг после истечения времени (🏁 в таблице)
 }
 
-interface Segment { name: string; simClock: number; realMin: number; cutoff: number }
+interface Segment { name: string; simClock: number; realMin: number; cutoff: number; cars?: string[] }
 
 /** Реальные форматы сессий по сериям: FP / квалификация / спринт-квалификация */
 /** Реальные форматы сессий. simClock — в тех же секундах, что и время круга (1 сим-сек = 1 сек),
@@ -1116,8 +1122,11 @@ export class SessionSim {
       }
     }
     const seg0 = this.segments[this.segIdx].simClock;
+    const segCars = this.segments[this.segIdx].cars;
     for (const car of this.cars) {
       if (car.state === 'elim' || car.state === 'done') { car.status = 'park'; continue; }
+      // Формула Е: в каждом сегменте (группа/дуэль) едут только отведённые ему машины
+      if (segCars && !segCars.includes(car.did)) { car.status = 'park'; continue; }
       if (car.state === 'garage') {
         car.status = 'park';
         if (this.clockExpired) continue; // после истечения времени новых выездов нет
@@ -1517,6 +1526,12 @@ export interface SimCar {
   redParked: boolean;                   // стоит в боксах под красным флагом
   scPitUsed: boolean;                   // уже воспользовался бесплатным питом под SC (один раз)
   finishSeq: number;                    // порядковый номер пересечения финишной черты (для стабильного порядка)
+  /* --- Формула Е: энергия и режим атаки --- */
+  isFE: boolean;                        // машина Формулы Е (энергия вместо топлива, без износа шин)
+  attackUsed: boolean;                  // режим атаки берётся строго 1 раз за гонку
+  attackUntil: number;                  // момент окончания режима атаки (sim t); 0 = не активен
+  pendingTimeLoss: number;              // разовая потеря времени (активация атаки = 2 с)
+  attackPlannedLap: number;             // круг, на котором ИИ планирует активировать атаку
 }
 
 export interface SimEvent { lap: number; text: string; kind: 'info' | 'sc' | 'red' | 'pit' | 'crash' | 'flag' }
@@ -1578,8 +1593,10 @@ export class RaceSim {
         isPlayer: t.id === gs.playerTeamId, nat: d.nat,
         lap: 0, dist: -i * 14 - (i % 2) * 7, targetLap: 0, lapStartT: 0, lapStartDist: -i * 14,
         lastLap: null, bestLap: null,
-        // стартовый запас топлива под ВЫБРАННЫЙ режим с запасом 12% — ИИ гарантированно доедет
-        tire: strat.startTire, tireAge: 0, wear: 0, fuel: Math.round(totalLaps * fuelBurnFor(strat.fuelMode) * 1.12), damage: 0,
+        // Формула Е: поле fuel = заряд энергии (все стартуют со 100%). Остальные — топливо в кг.
+        tire: strat.startTire, tireAge: 0, wear: 0,
+        fuel: gs.playerSeries === 'fe' ? 100 : Math.round(totalLaps * fuelBurnFor(strat.fuelMode) * 1.12),
+        damage: 0,
         noiseState: 0,
         eqDist: -i * 14 - (i % 2) * 7, // стартует с тем же разбросом, что и dist
         status: 'run', outReason: '', finishT: 0,
@@ -1598,6 +1615,12 @@ export class RaceSim {
         redParked: false,
         scPitUsed: false,
         finishSeq: 0,
+        isFE: gs.playerSeries === 'fe',
+        attackUsed: false,
+        attackUntil: 0,
+        pendingTimeLoss: 0,
+        // ИИ планирует активацию атаки в середине гонки (разброс, чтобы не все разом)
+        attackPlannedLap: Math.max(2, Math.floor(totalLaps * (0.3 + rnd() * 0.35))),
       };
       car.targetLap = this.lapEstimate(car, true);
       this.cars.push(car);
@@ -1877,6 +1900,7 @@ export class RaceSim {
   /** Фактический износ за круг = плановый (режимы зафиксированы на отрезок) × нейтралитет.
    *  Совпадает с planWearRate, поэтому прогноз плана точен. Под SC/VSC резину берегут. */
   wearPerLap(car: SimCar): number {
+    if (car.isFE) return 0; // Формула Е: единая резина без износа
     const neutralF = this.phase === 'sc' || this.phase === 'vsc' ? 0.3 : 1;
     return this.planWearRate(this.gs.teams[car.tid], car.mode, car.fuelMode, car.setup) * neutralF;
   }
@@ -1905,8 +1929,13 @@ export class RaceSim {
     // сглаженный шум: случайное блуждание с возвратом — темп меняется плавно, отрывы не «скачут»
     const noise = (1.4 - car.cons / 100) * 0.34 * car.noiseState;
     let lap = baseLap(c, this.gs.playerSeries) + 10.4 - car.perf * 0.085 - car.skill * 0.06
-      + tire + car.fuel * 0.033 + car.damage * 0.03 + modePen + fuelPen + orderPen + noise
+      + tire + (car.isFE ? 0 : car.fuel * 0.033) + car.damage * 0.03 + modePen + fuelPen + orderPen + noise
       + setupLapDelta(car.setup, c);
+    if (car.isFE) {
+      // Формула Е: экономия = 98% темпа стандарта, режим атаки = на 3% быстрее
+      if (car.fuelMode === 'eco') lap /= 0.98;
+      if (this.t < car.attackUntil) lap /= 1.03;
+    }
     if (this.raining) {
       const rainOk = ['I', 'W', 'AW'].includes(car.tire);
       lap += rainOk ? 1.2 : 7.5;
@@ -1921,6 +1950,15 @@ export class RaceSim {
   /** Доля износа 0..1+ для отображения и решений ИИ */
   wearFrac(car: SimCar): number {
     return car.wear / compoundDef(this.gs.playerSeries, car.tire).life;
+  }
+
+  /** Формула Е: расход энергии за круг (%). База рассчитана так, что чистый «стандарт»
+   *  расходует ~98% за гонку; экономия = 98% от базы, режим атаки = +3% в своё окно. */
+  energyPerLap(car: SimCar): number {
+    const base = 100 / (this.totalLaps * 1.02);
+    let burn = base * (car.fuelMode === 'eco' ? 0.98 : 1);
+    if (this.t < car.attackUntil) burn *= 1.03;
+    return burn;
   }
 
   /** Ф1: 18–25 с под зелёными; остальные серии 30–40 с; под SC/VSC — вдвое меньше */
@@ -2182,7 +2220,9 @@ export class RaceSim {
 
   cross(car: SimCar) {
     car.lapStartDist += this.track.total;
-    const lapTime = this.t - car.lapStartT;
+    let lapTime = this.t - car.lapStartT;
+    // разовая потеря времени (активация режима атаки в Формуле Е)
+    if (car.pendingTimeLoss > 0) { lapTime += car.pendingTimeLoss; car.pendingTimeLoss = 0; }
     car.lapStartT = this.t;
     car.lap++;
     car.lastLap = lapTime;
@@ -2222,8 +2262,13 @@ export class RaceSim {
     this.aiDecide(car);
     // машина свернула в боксы: комплект свежий (0%), топливо и износ за этот круг не тратятся
     if (this.nextPitLap(car) === car.lap) { this.beginPit(car); return; }
-    car.fuel = Math.max(0, car.fuel - fuelBurnFor(car.fuelMode));
-    if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
+    if (car.isFE) {
+      car.fuel = Math.max(0, car.fuel - this.energyPerLap(car));
+      if (car.fuel <= 0) return this.retire(car, 'Села батарея — энергия исчерпана');
+    } else {
+      car.fuel = Math.max(0, car.fuel - fuelBurnFor(car.fuelMode));
+      if (car.fuel <= 0) return this.retire(car, 'Закончилось топливо');
+    }
     if (car.letThrough) {
       car.letThroughLaps--;
       if (car.letThroughLaps <= 0) { car.letThrough = false; this.event(car.lap, `${car.code}: приказ снят, свободная гонка`, 'info'); }
@@ -2243,6 +2288,26 @@ export class RaceSim {
     if (this.kind !== 'race' && this.kind !== 'sprint' && this.kind !== 'sprintRev') return;
     const isSprint = this.kind !== 'race';
     const lapsLeft = this.totalLaps - car.lap;
+
+    // ---- ФОРМУЛА Е: энергия + обязательный режим атаки (строго 1 раз) ----
+    if (car.isFE) {
+      // режим атаки: активируем в запланированный момент, обязательно до конца гонки
+      if (!car.attackUsed && this.phase === 'green' && car.lap >= 1) {
+        const mustUse = lapsLeft <= 3; // крайний срок — иначе не успеет
+        if (mustUse || car.lap === car.attackPlannedLap) this.activateAttack(car, false);
+      }
+      // экономия энергии: если на стандарте не хватит до финиша — переходим в эко
+      if (car.fuelMode !== 'eco') {
+        const projected = car.fuel - lapsLeft * this.energyPerLap(car);
+        if (projected < 2) {
+          car.fuelMode = 'eco';
+          if (rnd() < 0.3) this.event(car.lap, `🔋 ${car.code} экономит энергию`, 'info');
+        }
+      } else if (car.fuel > lapsLeft * this.energyPerLap(car) + 6 && rnd() < 0.2) {
+        car.fuelMode = 'normal'; // достаточный запас — можно ехать в стандартном темпе
+      }
+      return;
+    }
 
     // Топливный менеджмент (и в гонках, и в спринтах): ИИ следит, чтобы топливо не кончилось.
     // Если на текущем режиме не хватит до финиша — ступенчато снижает (push → normal → eco).
@@ -2612,6 +2677,28 @@ export class RaceSim {
     car.targetLap = this.lapEstimate(car);
     this.event(car.lap, `📻 КОМАНДНЫЙ ПРИКАЗ: ${car.code} пропускает напарника`, 'info');
   }
+
+  /** Формула Е: активация режима атаки (строго 1 раз за гонку).
+   *  Сейчас −2 с, затем 8 минут (480 с симуляции) темп на 3% выше и расход энергии +3%. */
+  activateAttack(car: SimCar, byPlayer: boolean): void {
+    if (!car.isFE || car.attackUsed || car.status !== 'run') return;
+    car.attackUsed = true;
+    car.attackUntil = this.t + 480;
+    car.pendingTimeLoss = 2;
+    car.targetLap = this.lapEstimate(car);
+    this.event(car.lap, `⚡ ${car.code}: РЕЖИМ АТАКИ — ${byPlayer ? 'по команде игрока' : ''} +3% темпа на 8 минут (−2 с сейчас)`, 'info');
+  }
+
+  /** Публичный метод для игрока (Формула Е): включить режим атаки по did. */
+  playerActivateAttack(did: string): void {
+    const car = this.cars.find((c) => c.did === did);
+    if (car) this.activateAttack(car, true);
+  }
+
+  /** Оставшееся время режима атаки в секундах (0 = не активен). */
+  attackRemaining(car: SimCar): number {
+    return Math.max(0, car.attackUntil - this.t);
+  }
 }
 
 export function makeRaceSim(gs: GameState, kind: SimKind, grid: string[], circuit: Circuit, wet: boolean, rainMid: boolean, startOverrides?: Record<string, string>): RaceSim {
@@ -2777,8 +2864,7 @@ export function fitComponent(gs: GameState, did: string, el: PUElement, w: Weeke
   const places = el === 'EX' ? (over === 1 ? 10 : 5) : el === 'ES' || el === 'CE' ? 5 : 15;
   const target = w ? w.pendingGrid : gs.nextRoundPen;
   target[did] = (target[did] ?? 0) + places;
-  const pit = target[did] > 15;
-  return `${d.code}: ${el} №${comps[el]} сверх лимита → −${places} поз. (суммарно −${target[did]}${pit ? ', старт с пит-лейна' : ''})`;
+  return `${d.code}: ${el} №${comps[el]} сверх лимита → −${places} поз. (суммарно −${target[did]}, при переборе — старт с конца)`;
 }
 
 /* --- Силовая установка Ф2/Ф3: единый мотор, замена без штрафа решётки --- */

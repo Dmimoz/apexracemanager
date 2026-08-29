@@ -130,9 +130,9 @@ export function ResultTable({ rows, game, showBest, showPts, pens }: {
   rows: { pos: number; did: string; tid: string; display: string; best?: string | null; points: number; note?: string }[];
   game: { drivers: Record<string, { name: string; code: string; nat: string }>; teams: Record<string, { name: string; short: string; color: string; color2: string; id: string }> };
   showBest?: boolean; showPts?: boolean;
-  pens?: Record<string, { places: number; pit: boolean }>; // штрафы стартовой решётки
+  pens?: Record<string, { places: number }>; // штрафы стартовой решётки
 }) {
-  const hasPens = !!pens && Object.values(pens).some((p) => p.places > 0 || p.pit);
+  const hasPens = !!pens && Object.values(pens).some((p) => p.places > 0);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[13px]">
@@ -157,13 +157,9 @@ export function ResultTable({ rows, game, showBest, showPts, pens }: {
                 <td className="pr-2">
                   <div className="flex items-center gap-2 font-semibold whitespace-nowrap flex-wrap">
                     <FlagTag nat={d.nat} />{d.name}
-                    {pens?.[r.did] && pens[r.did].places > 0 && !pens[r.did].pit && (
+                    {pens?.[r.did] && pens[r.did].places > 0 && (
                       <span className="font-disp text-[9px] font-bold text-[#ff6b4b] border border-[#ff6b4b66] px-1 rounded-sm"
                         title={`Штраф −${pens[r.did].places} поз. на стартовой решётке`}>−{pens[r.did].places}⊞</span>
-                    )}
-                    {pens?.[r.did]?.pit && (
-                      <span className="font-disp text-[9px] font-bold text-[#141a10] bg-[#ff9f43] px-1 rounded-sm"
-                        title="Старт с пит-лейна (штраф ≥16 позиций)">ПИТ-ЛЕЙН</span>
                     )}
                     {r.note && <span className="text-[10px] text-[#ffc94d] max-w-[220px] truncate" title={r.note}>· {r.note}</span>}
                   </div>
@@ -181,8 +177,7 @@ export function ResultTable({ rows, game, showBest, showPts, pens }: {
       </table>
       {hasPens && (
         <div className="mt-2 flex items-center gap-4 text-[9px] text-[#5a6a80]">
-          <span className="flex items-center gap-1"><span className="font-disp font-bold text-[#ff6b4b] border border-[#ff6b4b66] px-1 rounded-sm">−N⊞</span> штраф позиций на старте</span>
-          <span className="flex items-center gap-1"><span className="font-disp font-bold text-[#141a10] bg-[#ff9f43] px-1 rounded-sm">ПИТ-ЛЕЙН</span> старт из боксов</span>
+          <span className="flex items-center gap-1"><span className="font-disp font-bold text-[#ff6b4b] border border-[#ff6b4b66] px-1 rounded-sm">−N⊞</span> штраф позиций на старте (при переборе — старт с конца)</span>
         </div>
       )}
     </div>
