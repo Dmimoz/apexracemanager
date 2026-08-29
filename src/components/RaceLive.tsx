@@ -279,7 +279,7 @@ export default function RaceLive({ stage, startTires, onDone, onAbort }: {
                       : inPit ? <span className="text-[#ffc94d]">В БОКСАХ</span>
                       : car.status === 'fin'
                         ? (car.finishT === winnerT ? '🏁' : `+${(car.finishT - winnerT).toFixed(1)}`)
-                        : car.pos === 1 ? `К${car.lap + 1}` : car.interval >= 90 ? `+${Math.floor(car.interval / 60)}:${(car.interval % 60).toFixed(3).padStart(6, '0')}` : `+${car.interval.toFixed(3)}`}
+                        : (car.pos === 1 || car.interval === 0) ? `К${car.lap + 1}` : car.interval >= 90 ? `+${Math.floor(car.interval / 60)}:${(car.interval % 60).toFixed(3).padStart(6, '0')}` : `+${car.interval.toFixed(3)}`}
                   </span>
                   <span className={`num w-[86px] text-right text-[13px] ${isPurple ? 'text-[#c884ff] font-bold' : 'text-[#7f8da0]'}`}>
                     {car.lastLap != null ? fmtLap(car.lastLap) : '—'}

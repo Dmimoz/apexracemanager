@@ -2312,8 +2312,10 @@ export class RaceSim {
 
   computeStandings() {
     const inPit = (c: SimCar) => c.status === 'run' && (c.pitting || c.pitCrawl > 0);
-    // Машина в боксах стоит на месте (dist заморожен) — соперники обходят её по одному,
-    // поэтому в таблице она ОПУСКАЕТСЯ ПЛАВНО, а не падает вниз и не телепортируется обратно.
+    // ВАЖНО: сортируем едущие машины по eqDist (средний прогресс) — по той же координате,
+    // по которой считаются отрывы. Раньше сортировка шла по мгновенному dist (прямая/поворот),
+    // а отрывы — по eqDist: машины равного темпа «обгоняли» друг друга мгновенно, и отрыв
+    // застревал на +0.000. Теперь порядок таблицы всегда согласован с отрывами.
     const sorted = [...this.cars].sort((a, b) => {
       if (a.status === 'fin' && b.status === 'fin') return a.finishSeq - b.finishSeq;
       if (a.status === 'fin') return -1;
@@ -2321,30 +2323,45 @@ export class RaceSim {
       if (a.status === 'out' && b.status === 'out') return b.dist - a.dist;
       if (a.status === 'out') return 1;
       if (b.status === 'out') return -1;
-      return b.dist - a.dist;
+      return b.eqDist - a.eqDist;
     });
-    const lead = sorted.find((c) => c.status === 'run');
+    // лидер-ориентир — первая машина НА ТРАССЕ (заехавший в боксы лидер не даёт «нулевых» отрывов)
+    const lead = sorted.find((c) => c.status === 'run' && !inPit(c));
     const leaderSpeed = lead ? this.track.total / lead.targetLap : 60;
     const drsSeries = this.gs.playerSeries === 'f2' || this.gs.playerSeries === 'f3';
     sorted.forEach((car, i) => {
       car.pos = i + 1;
       if (lead && car.status === 'run') {
-        // Отрывы считаем по eqDist (средняя скорость каждой машины) — они НЕ скачут
-        // от мгновенного положения на трассе (прямая/поворот), а плавно отражают чистый темп.
+        // Отрывы по eqDist — плавные, без скачков от мгновенного положения на трассе.
         const carSpeed = this.track.total / car.targetLap;
         if (inPit(car)) {
-          // машина в боксах: отставание = текущее время простоя (реалистично, без аномалий)
-          car.gap = Math.max(0, (lead.eqDist - car.eqDist) / carSpeed);
+          // машина в боксах: отставание = дефицит до лидера на трассе + остаток простоя —
+          // растёт всё время стоянки, никогда не «застревает» на нуле
+          car.gap = Math.max(0, (lead.eqDist - car.eqDist) / carSpeed) + Math.max(0, car.pitCrawl);
           car.interval = car.gap;
         } else {
           car.gap = car === lead ? 0 : Math.max(0, (lead.eqDist - car.eqDist) / carSpeed);
-          const ahead = sorted[i - 1];
-          car.interval = ahead && ahead.status === 'run' && !inPit(ahead) ? Math.max(0, (ahead.eqDist - car.eqDist) / carSpeed) : car.gap;
+          // отрыв — до ближайшей машины НА ТРАССЕ: заехавшие в боксы «прозрачны»
+          // (после возвращения они всё равно окажутся позади)
+          let aheadOT: SimCar | null = null;
+          for (let j = i - 1; j >= 0; j--) {
+            const a = sorted[j];
+            if (a.status === 'run' && !inPit(a)) { aheadOT = a; break; }
+          }
+          if (aheadOT) {
+            // при сортировке по eqDist впереди идущий всегда не позади — отрыв неотрицателен
+            car.interval = Math.max(0, (aheadOT.eqDist - car.eqDist) / carSpeed);
+          } else {
+            car.interval = 0; // голова цепочки на трассе — в таблице покажется счётчик круга
+          }
         }
         // защита от аномально больших отставаний (не более 2 кругов)
         const maxGap = (this.track.total * 2) / leaderSpeed;
         car.gap = Math.min(car.gap, maxGap);
         car.interval = Math.min(car.interval, maxGap);
+        // страховка: крошечные положительные отрывы округляем вверх (ноль допустим
+        // только у головы цепочки на трассе — там показывается счётчик круга)
+        if (car !== lead && !inPit(car) && car.interval > 0 && car.interval < 0.001) car.interval = 0.001;
         // DRS: только Ф2/Ф3, со 2-го круга, при отставании менее секунды, только по сухому
         car.drs = drsSeries && !this.raining && !inPit(car) && car.lap >= 1 && car.interval < 1.0 && this.phase === 'green';
       } else {
