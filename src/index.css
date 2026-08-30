@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0a0c10;
+  --panel: #12161d;
+  --panel2: #171d26;
+  --line: #252e3b;
+  --text: #e7edf4;
+  --mut: #7f8da0;
+  --acc: #ff2d2d;
+  --lime: #d8f224;
+  --purple: #c884ff;
+  --green: #4ade80;
+  --amber: #ffc94d;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "Titillium Web", "Segoe UI", sans-serif;
+  font-size: 15px;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(115deg, transparent 0 54px, rgba(255,255,255,0.014) 54px 56px),
+    radial-gradient(1200px 500px at 75% -10%, rgba(255,45,45,0.07), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(216,242,36,0.045), transparent 60%);
+}
+body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(900px 600px at 50% 30%, #000 20%, transparent 80%);
+}
+#root { position: relative; z-index: 1; }
+
+.font-disp { font-family: "Orbitron", "Titillium Web", sans-serif; }
+.clip { clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px); }
+.clip-sm { clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px); }
+
+.panel { background: linear-gradient(180deg, #151b24 0%, #10151c 100%); border: 1px solid var(--line); }
+.panel-hl { border-top: 2px solid var(--acc); }
+.checker { background: repeating-conic-gradient(#e8e8e8 0% 25%, #14161a 0% 50%); background-size: 14px 14px; }
+
+.btn-race {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transform: skewX(-10deg); border: 1px solid var(--line);
+  background: linear-gradient(180deg, #1c2430, #141a23); color: var(--text);
+  padding: 9px 20px; font-family: "Orbitron", sans-serif; font-weight: 700; font-size: 12px;
+  letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s; user-select: none;
+}
+.btn-race > * { transform: skewX(10deg); }
+.btn-race:hover:not(:disabled) { transform: skewX(-10deg) translateY(-2px); border-color: var(--acc); box-shadow: 0 6px 22px -6px var(--acc); }
+.btn-race:active:not(:disabled) { transform: skewX(-10deg) translateY(1px); }
+.btn-race:disabled { opacity: .38; cursor: not-allowed; }
+.btn-acc { background: linear-gradient(180deg, var(--acc), color-mix(in srgb, var(--acc) 70%, #000)); border-color: transparent; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+
+.btn-tab {
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px;
+  font-family: "Orbitron", sans-serif; font-size: 11px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--mut);
+  border: 1px solid transparent; border-bottom: 2px solid transparent;
+  cursor: pointer; background: none; transition: color .15s, border-color .15s, background .15s;
+}
+.btn-tab:hover { color: var(--text); }
+.btn-tab.on { color: var(--text); border-bottom-color: var(--acc); background: linear-gradient(180deg, color-mix(in srgb, var(--acc) 12%, transparent), transparent); }
+
+.reveal { animation: rise .5s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+.blink { animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+.pulse-acc { animation: pulseAcc 1.6s ease-in-out infinite; }
+@keyframes pulseAcc { 0%,100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 55%, transparent); } 50% { box-shadow: 0 0 24px 2px color-mix(in srgb, var(--acc) 45%, transparent); } }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #2a3442; border: 2px solid #0d1117; }
+::-webkit-scrollbar-thumb:hover { background: #3a4757; }
+.num { font-variant-numeric: tabular-nums; }
