@@ -41,6 +41,8 @@ const MAP = {
   'interlagos-2.svg': 'interlagos',
   'las-vegas-1.svg': 'vegas',
   'yas-marina-2.svg': 'yasmarina',
+  'lusail-1.svg': 'lusail',
+  'madring-1.svg': 'madrid',
 };
 
 async function fetchWithRetry(url, tries = 5) {
